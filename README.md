@@ -23,6 +23,7 @@ By using EchoEtcher, you acknowledge that you understand and accept the risks as
 
 - **Folder Monitoring**: Monitors a selected folder (e.g., iCloud) for new audio files
 - **Local Transcription**: Transcribes audio locally using Whisper (configurable model size)
+- **Large File Support**: Automatically handles large audio files by chunking them into manageable segments
 - **AI Processing**: Processes transcriptions locally with Ollama
 - **Smart Note Generation**: Auto-generates formatted Markdown notes with allowed tags
 - **Audio Embedding**: Links original audio files in Obsidian vault
@@ -132,10 +133,38 @@ Edit the `.env` file to configure:
 - `WHISPER_MODEL_SIZE`: Whisper model size - `tiny`, `base`, `small`, `medium`, `large`, `large-v2`, `large-v3` (default: `medium`)
 - `SEQUENTIAL_PROCESSING`: Enable sequential processing mode - unloads Whisper after transcription to free memory (default: `true`)
 - `ALLOWED_TAGS_FILE`: Path to allowed tags file (default: `allowed_tags.md`)
+- `WHISPER_CHUNK_THRESHOLD`: Duration in seconds above which files are automatically chunked (default: `240` = 4 minutes)
+- `WHISPER_CHUNK_DURATION`: Duration in seconds for each chunk when processing large files (default: `30`)
+- `WHISPER_CHUNK_OVERLAP`: Overlap in seconds between chunks to ensure smooth merging (default: `5`)
+
+### Large File Handling
+
+EchoEtcher automatically handles large audio files by splitting them into smaller chunks for processing. This prevents memory issues and processing failures that can occur with very long recordings.
+
+**How it works:**
+- Files longer than 4 minutes (240 seconds) are automatically split into 30-second chunks with 5-second overlaps
+- Each chunk is transcribed separately, then intelligently merged back together
+- The overlap ensures smooth transitions between chunks and prevents missing words at boundaries
+- All chunking happens automatically - no manual intervention needed
+
+**Configuration:**
+You can customize the chunking behavior via environment variables:
+- `WHISPER_CHUNK_THRESHOLD`: Files longer than this (in seconds) will be chunked (default: 240)
+- `WHISPER_CHUNK_DURATION`: Size of each chunk in seconds (default: 30)
+- `WHISPER_CHUNK_OVERLAP`: Overlap between chunks in seconds (default: 5)
+
+**Benefits:**
+- ✅ No more 4-minute recording limits - process files of any length
+- ✅ Prevents memory errors and crashes
+- ✅ More reliable processing of long recordings
+- ✅ Automatic fallback to chunking if single-file processing fails
 
 ### Hardware Recommendations
 
 EchoEtcher uses **sequential processing by default** to optimize memory usage. This means Whisper unloads after transcription, freeing memory for Ollama processing. This allows you to use larger, higher-quality models even on systems with limited VRAM/RAM.
+
+**Large File Processing:**
+The chunking system means you can process files of any length, even on systems with limited memory. The default 30-second chunks are small enough to process reliably on most systems.
 
 #### Recommended Configurations
 
