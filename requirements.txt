@@ -1,8 +1,13 @@
-# PyTorch - use CPU version for macOS, CUDA version for Linux with GPU
-# For macOS (Apple Silicon or Intel), install with: pip install torch
-# For Linux with CUDA 11.8, uncomment the line below and comment out the torch line:
-# --extra-index-url https://download.pytorch.org/whl/cu118
-# torch==2.6.0+cu118
+# PyTorch - auto-detects best version based on platform
+# The code will auto-adapt to:
+#   - Apple Silicon (MPS): Uses built-in GPU acceleration
+#   - NVIDIA GPU (CUDA): Automatically detects and uses CUDA if available
+#   - CPU: Falls back to CPU if no GPU available
+#
+# For macOS (Apple Silicon or Intel): pip install torch (default)
+# For Windows/Linux with NVIDIA GPU: 
+#   Option 1: pip install torch (will use CPU, but code will detect CUDA if you install CUDA PyTorch separately)
+#   Option 2: Install CUDA version: pip install torch --index-url https://download.pytorch.org/whl/cu118
 torch>=2.0.0
 watchdog>=3.0.0
 openai-whisper>=20231117

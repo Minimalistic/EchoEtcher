@@ -57,6 +57,46 @@ def setup_logging(verbose=False):
     
     logging.info("Logging system initialized with rotation enabled")
 
+def check_ffmpeg():
+    """Check if ffmpeg is available in PATH."""
+    try:
+        result = subprocess.run(['ffmpeg', '-version'], 
+                              capture_output=True, 
+                              text=True, 
+                              timeout=5)
+        if result.returncode == 0:
+            # Extract version info
+            version_line = result.stdout.split('\n')[0] if result.stdout else "available"
+            logging.info(f"FFmpeg found: {version_line}")
+            return True
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        logging.warning(f"Error checking ffmpeg: {e}")
+    
+    # Try to find ffmpeg in common locations
+    common_paths = [
+        '/opt/homebrew/bin/ffmpeg',  # Homebrew on Apple Silicon
+        '/usr/local/bin/ffmpeg',     # Homebrew on Intel Mac
+        '/usr/bin/ffmpeg',           # System location
+    ]
+    
+    for path in common_paths:
+        if Path(path).exists():
+            logging.warning(f"FFmpeg found at {path} but not in PATH. Adding to PATH.")
+            os.environ['PATH'] = str(Path(path).parent) + os.pathsep + os.environ.get('PATH', '')
+            return True
+    
+    error_msg = (
+        "FFmpeg not found! FFmpeg is required for audio processing.\n\n"
+        "Install it with:\n"
+        "  macOS: brew install ffmpeg\n"
+        "  Linux: sudo apt install ffmpeg (or sudo yum install ffmpeg)\n"
+        "  Windows: Download from https://ffmpeg.org/download.html\n\n"
+        "After installing, restart the program."
+    )
+    raise ValueError(error_msg)
+
 def validate_config():
     """Validate that all required configuration is present."""
     required_vars = {
@@ -85,6 +125,9 @@ def validate_config():
     if invalid_paths:
         error_msg = "Invalid paths in configuration:\n  " + "\n  ".join(invalid_paths)
         raise ValueError(error_msg)
+    
+    # Check for ffmpeg
+    check_ffmpeg()
     
     # Validate optional settings
     whisper_size = os.getenv('WHISPER_MODEL_SIZE', 'medium')
@@ -595,6 +638,12 @@ Examples:
                 time.sleep(1)  # Sleep for 1 second, no need for rapid checks
                 
                 current_time = time.time()
+                
+                # Check files in progress every second (for stability checking)
+                # This ensures files are processed as soon as they're stable
+                if event_handler.files_in_progress:
+                    event_handler.check_files_in_progress()
+                
                 if current_time - last_check >= check_interval:
                     # Force a health check and directory scan
                     event_handler.check_health()

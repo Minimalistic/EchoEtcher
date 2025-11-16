@@ -38,7 +38,20 @@ By using EchoEtcher, you acknowledge that you understand and accept the risks as
 - Python 3.8+
 - [Ollama](https://ollama.ai/) installed locally
 - FFmpeg installed for audio processing
+  - **macOS**: `brew install ffmpeg`
+  - **Linux**: `sudo apt install ffmpeg` (Debian/Ubuntu) or `sudo yum install ffmpeg` (RHEL/CentOS)
+  - **Windows**: Download from [ffmpeg.org](https://ffmpeg.org/download.html) or use `choco install ffmpeg`
 - Obsidian vault set up
+
+### Hardware Acceleration
+
+EchoEtcher automatically detects and uses the best available hardware:
+
+- **NVIDIA GPU (Windows/Linux)**: Automatically detects and uses CUDA if PyTorch with CUDA support is installed
+- **CPU**: Uses CPU processing on macOS and when no GPU is available
+  - **Note**: MPS (Apple Silicon GPU) is not used due to compatibility issues with Whisper's sparse tensor operations. CPU processing works reliably on macOS.
+
+The device being used is logged at startup. No configuration needed - it just works!
 
 ## File Processing and Storage
 

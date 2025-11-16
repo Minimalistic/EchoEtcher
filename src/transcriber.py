@@ -3,6 +3,7 @@ from pathlib import Path
 import torch
 import re
 import warnings
+import logging
 
 # Filter out specific Whisper warnings about Triton/CUDA
 warnings.filterwarnings('ignore', message='Failed to launch Triton kernels')
@@ -10,12 +11,20 @@ warnings.filterwarnings('ignore', message='Failed to launch Triton kernels')
 class WhisperTranscriber:
     def __init__(self, model_size=None):
         import os
+        import platform
         if model_size is None:
             model_size = os.getenv('WHISPER_MODEL_SIZE', 'medium')
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        # Auto-detect best available device
+        device = self._detect_best_device()
         self.model = whisper.load_model(model_size).to(device)
         self.device = device
         self.model_size = model_size
+        
+        # Log device information
+        device_info = self._get_device_info()
+        logging.info(f"Using device: {device_info}")
+        
         # Default initial prompt for personal note-taking context
         self.default_prompt = (
             "This is a personal note or journal entry. "
@@ -23,6 +32,39 @@ class WhisperTranscriber:
             "in a natural, conversational style. "
             "Maintain proper sentence structure and punctuation."
         )
+    
+    def _detect_best_device(self):
+        """
+        Auto-detect the best available device for processing.
+        Priority: CUDA (NVIDIA GPU) > CPU
+        
+        Note: MPS (Apple Silicon GPU) is skipped due to compatibility issues
+        with Whisper's sparse tensor operations. CPU is used on macOS instead.
+        """
+        # Check for CUDA (NVIDIA GPU on Windows/Linux)
+        if torch.cuda.is_available():
+            return "cuda"
+        
+        # Skip MPS on macOS - Whisper has compatibility issues with MPS backend
+        # due to unsupported sparse tensor operations. CPU works reliably.
+        # if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        #     return "mps"
+        
+        # Fall back to CPU (including on macOS)
+        return "cpu"
+    
+    def _get_device_info(self):
+        """Get detailed information about the device being used."""
+        if self.device == "cuda":
+            gpu_name = torch.cuda.get_device_name(0)
+            gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            return f"CUDA ({gpu_name}, {gpu_memory:.1f}GB)"
+        elif self.device == "mps":
+            return "MPS (Apple Silicon GPU)"
+        else:
+            import platform
+            cpu_info = platform.processor() or "Unknown"
+            return f"CPU ({cpu_info})"
 
     def transcribe(self, audio_path: Path) -> dict:
         """
@@ -35,9 +77,13 @@ class WhisperTranscriber:
             dict: Dictionary containing transcribed text and metadata
         """
         try:
-            # Use better settings for GPU processing
+            # Optimize settings based on device
+            # CUDA can use fp16 for faster processing, CPU should use fp32
+            # Note: MPS is not used due to compatibility issues
+            use_fp16 = self.device == "cuda"
+            
             options = {
-                "fp16": False,  # Use full precision for better quality
+                "fp16": use_fp16,  # Use fp16 on GPU for speed, fp32 on CPU for accuracy
                 "beam_size": 5,  # Increase beam size for better accuracy
                 "best_of": 3,    # Reduced from 5 to prevent over-analysis
                 "temperature": [0.0],  # Single temperature to prevent variation
@@ -48,6 +94,8 @@ class WhisperTranscriber:
                 "no_speech_threshold": 0.6,  # More aggressive filtering of non-speech
                 "word_timestamps": True,    # Enable word timestamps for better segmentation
             }
+            
+            logging.debug(f"Transcription options: fp16={use_fp16}, device={self.device}")
             
             result = self.model.transcribe(str(audio_path), **options)
             
