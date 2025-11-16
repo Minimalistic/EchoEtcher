@@ -14,10 +14,14 @@ import sys
 import gc
 import json
 import re
+import argparse
 from datetime import datetime
 
+# Version information
+__version__ = "1.0.0"
+
 # Set up logging configuration
-def setup_logging():
+def setup_logging(verbose=False):
     # Create logs directory if it doesn't exist
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
@@ -44,7 +48,7 @@ def setup_logging():
     
     # Get the root logger and set its level
     logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG if verbose else logging.INFO)
     
     # Remove any existing handlers and add our configured handlers
     logger.handlers = []
@@ -53,15 +57,60 @@ def setup_logging():
     
     logging.info("Logging system initialized with rotation enabled")
 
+def validate_config():
+    """Validate that all required configuration is present."""
+    required_vars = {
+        'WATCH_FOLDER': 'Path to folder to watch for audio files',
+        'OBSIDIAN_VAULT_PATH': 'Path to Obsidian vault root directory',
+        'OLLAMA_MODEL': 'Ollama model name to use for processing'
+    }
+    
+    missing = []
+    invalid_paths = []
+    
+    for var, description in required_vars.items():
+        value = os.getenv(var)
+        if not value:
+            missing.append(f"{var} ({description})")
+        elif var in ['WATCH_FOLDER', 'OBSIDIAN_VAULT_PATH']:
+            path = Path(value)
+            if not path.exists():
+                invalid_paths.append(f"{var}: {value} (path does not exist)")
+    
+    if missing:
+        error_msg = "Missing required environment variables:\n  " + "\n  ".join(missing)
+        error_msg += "\n\nPlease copy .env.example to .env and configure it."
+        raise ValueError(error_msg)
+    
+    if invalid_paths:
+        error_msg = "Invalid paths in configuration:\n  " + "\n  ".join(invalid_paths)
+        raise ValueError(error_msg)
+    
+    # Validate optional settings
+    whisper_size = os.getenv('WHISPER_MODEL_SIZE', 'medium')
+    valid_whisper_sizes = ['tiny', 'base', 'small', 'medium', 'large', 'large-v2', 'large-v3']
+    if whisper_size not in valid_whisper_sizes:
+        logging.warning(f"Invalid WHISPER_MODEL_SIZE '{whisper_size}', using 'medium'. Valid options: {', '.join(valid_whisper_sizes)}")
+    
+    try:
+        temp = float(os.getenv('OLLAMA_TEMPERATURE', '0.3'))
+        if not 0.0 <= temp <= 1.0:
+            logging.warning(f"OLLAMA_TEMPERATURE should be between 0.0 and 1.0, got {temp}")
+    except ValueError:
+        logging.warning(f"Invalid OLLAMA_TEMPERATURE value, using default 0.3")
+    
+    logging.info("Configuration validation passed")
+
 from src.transcriber import WhisperTranscriber
 from src.processor import OllamaProcessor
 from src.note_manager import NoteManager
 
 class AudioFileHandler(FileSystemEventHandler):
-    def __init__(self):
-        setup_logging()
+    def __init__(self, dry_run=False):
+        self.dry_run = dry_run
         logging.info("Initializing AudioFileHandler...")
-        self.initialize_components()
+        if not self.dry_run:
+            self.initialize_components()
         self.processed_files = set()  # Track processed files
         self.failed_files = {}  # Track failed files and their attempt counts
         self.max_retry_attempts = 3  # Maximum number of retry attempts for failed files
@@ -194,6 +243,17 @@ class AudioFileHandler(FileSystemEventHandler):
         
         try:
             file_path = Path(event.src_path)
+            
+            # Skip iCloud placeholder files
+            if file_path.name.endswith('.icloud'):
+                logging.debug(f"Skipping iCloud placeholder file: {file_path}")
+                return
+            
+            # Check if file is actually an iCloud placeholder (sometimes they don't have .icloud extension)
+            if file_path.exists() and file_path.stat().st_size == 0:
+                logging.debug(f"Skipping empty file (likely iCloud placeholder): {file_path}")
+                return
+            
             if file_path.suffix.lower() in ['.mp3', '.wav', '.m4a']:
                 # Check if we've already processed this file
                 if file_path.name in self.processed_files:
@@ -204,7 +264,8 @@ class AudioFileHandler(FileSystemEventHandler):
                 self.start_monitoring_file(file_path)
                 
         except Exception as e:
-            logging.error(f"Error in on_created handler: {str(e)}")
+            logging.error(f"Error in on_created handler for {event.src_path}: {str(e)}")
+            logging.exception("Full error trace:")
 
     def start_monitoring_file(self, file_path):
         """Start monitoring a file for stability"""
@@ -281,14 +342,28 @@ class AudioFileHandler(FileSystemEventHandler):
 
     def _process_audio_file(self, file_path):
         try:
+            start_time = time.time()
             logging.info(f"Processing file: {file_path}")
+            
+            if self.dry_run:
+                logging.info(f"[DRY RUN] Would process: {file_path}")
+                logging.info(f"[DRY RUN] File size: {file_path.stat().st_size / 1024 / 1024:.2f} MB")
+                self.processed_files.add(file_path.name)
+                return
             
             str_path = str(file_path)
             
-            # Check if file exists and is accessible
-            if not file_path.exists():
-                logging.debug(f"File not found (may have been moved): {file_path}")
-                return
+            # Check if file exists and is accessible (with retry for iCloud sync)
+            max_checks = 3
+            for check in range(max_checks):
+                if file_path.exists():
+                    break
+                if check < max_checks - 1:
+                    logging.debug(f"File not found (attempt {check + 1}/{max_checks}), waiting for iCloud sync...")
+                    time.sleep(2)
+                else:
+                    logging.debug(f"File not found after {max_checks} attempts (may have been moved): {file_path}")
+                    return
             
             # Extract source date and time
             source_date, source_time = self._extract_source_datetime(file_path)
@@ -320,7 +395,8 @@ class AudioFileHandler(FileSystemEventHandler):
             
             # Create note
             self.note_manager.create_note(processed_content, file_path)
-            logging.info(f"Note created successfully for: {file_path}")
+            processing_time = time.time() - start_time
+            logging.info(f"Note created successfully for: {file_path} (took {processing_time:.1f}s)")
             
             # Add to processed files
             self.processed_files.add(file_path.name)
@@ -332,7 +408,19 @@ class AudioFileHandler(FileSystemEventHandler):
                 
         except Exception as e:
             error_msg = str(e)
-            logging.error(f"Error processing {file_path}: {error_msg}")
+            error_type = type(e).__name__
+            
+            # Provide more user-friendly error messages
+            if "Transcription failed" in error_msg:
+                user_msg = f"Failed to transcribe audio file. This might be due to:\n  - Corrupted audio file\n  - Unsupported audio format\n  - Insufficient system resources\n  Original error: {error_msg}"
+            elif "Ollama" in error_type or "connection" in error_msg.lower():
+                user_msg = f"Failed to connect to Ollama. Please ensure:\n  - Ollama is running (run 'ollama serve')\n  - The model '{os.getenv('OLLAMA_MODEL')}' is available (run 'ollama pull {os.getenv('OLLAMA_MODEL')}')\n  - Original error: {error_msg}"
+            elif "JSON" in error_type or "JSON" in error_msg:
+                user_msg = f"Failed to parse AI response. This might be due to:\n  - Model response format issues\n  - Network timeout\n  - Original error: {error_msg}"
+            else:
+                user_msg = f"Unexpected error: {error_msg}"
+            
+            logging.error(f"Error processing {file_path}: {user_msg}")
             logging.exception("Full error trace:")
             
             str_path = str(file_path)
@@ -342,21 +430,32 @@ class AudioFileHandler(FileSystemEventHandler):
             
             # If we've exceeded max retries, move to error directory
             if self.failed_files[str_path] >= self.max_retry_attempts:
-                logging.warning(f"File {file_path} has exceeded maximum retry attempts. Moving to error directory.")
-                self.move_to_error_dir(file_path)
+                logging.warning(f"File {file_path} has exceeded maximum retry attempts ({self.max_retry_attempts}). Moving to error directory.")
+                if not self.dry_run:
+                    self.move_to_error_dir(file_path)
 
     def scan_directory(self):
         """Scan the watch directory for any unprocessed audio files"""
         try:
             watch_path = os.getenv('WATCH_FOLDER')
             if not watch_path or not os.path.exists(watch_path):
-                logging.error("Watch folder not found or not set")
+                logging.error(f"Watch folder not found or not set: {watch_path}")
                 return False
 
             # Get all files except those in the errors directory
-            all_files = [f for f in Path(watch_path).glob('*') 
-                        if f.parent != self.error_dir and f.is_file() 
-                        and f.suffix.lower() in ['.mp3', '.wav', '.m4a']]
+            # Skip iCloud placeholder files and empty files
+            all_files = []
+            for f in Path(watch_path).glob('*'):
+                if (f.parent != self.error_dir and f.is_file() 
+                    and f.suffix.lower() in ['.mp3', '.wav', '.m4a']
+                    and not f.name.endswith('.icloud')):
+                    # Skip empty files (likely iCloud placeholders)
+                    try:
+                        if f.exists() and f.stat().st_size > 0:
+                            all_files.append(f)
+                    except (OSError, PermissionError) as e:
+                        logging.debug(f"Could not check file {f}: {e}")
+                        continue
             
             if all_files:
                 logging.info(f"Found {len(all_files)} audio files in watch directory")
@@ -413,18 +512,55 @@ def ensure_ollama_running():
             return False
 
 def main():
+    parser = argparse.ArgumentParser(
+        description='EchoEtcher - Automated audio transcription and note generation',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python main.py                    # Run normally
+  python main.py --dry-run          # Test without processing files
+  python main.py --verbose          # Enable debug logging
+  python main.py --version          # Show version information
+        """
+    )
+    parser.add_argument('--dry-run', action='store_true',
+                        help='Test mode: scan and log but do not process files')
+    parser.add_argument('--verbose', '-v', action='store_true',
+                        help='Enable verbose/debug logging')
+    parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
+    
+    args = parser.parse_args()
+    
+    # Set up logging first (before loading env to see any issues)
+    setup_logging(verbose=args.verbose)
+    
     load_dotenv(override=True)
     
-    # Debug: Print environment variables
+    # Validate configuration
+    try:
+        validate_config()
+    except ValueError as e:
+        logging.error(str(e))
+        sys.exit(1)
+    
+    # Log configuration (without sensitive data)
+    logging.info(f"EchoEtcher v{__version__} starting...")
     logging.info(f"WATCH_FOLDER = {os.getenv('WATCH_FOLDER')}")
     logging.info(f"OBSIDIAN_VAULT_PATH = {os.getenv('OBSIDIAN_VAULT_PATH')}")
-    logging.info(f"NOTES_FOLDER = {os.getenv('NOTES_FOLDER')}")
+    logging.info(f"NOTES_FOLDER = {os.getenv('NOTES_FOLDER', 'notes')}")
+    logging.info(f"OLLAMA_MODEL = {os.getenv('OLLAMA_MODEL')}")
+    logging.info(f"WHISPER_MODEL_SIZE = {os.getenv('WHISPER_MODEL_SIZE', 'medium')}")
+    
+    if args.dry_run:
+        logging.info("DRY RUN MODE: Files will be scanned but not processed")
     
     # Set up signal handlers for graceful shutdown
+    observer = None
     def signal_handler(signum, frame):
         logging.info(f"Received signal {signum}. Initiating graceful shutdown...")
-        observer.stop()
-        observer.join()
+        if observer:
+            observer.stop()
+            observer.join()
         logging.info("Shutdown complete")
         sys.exit(0)
     
@@ -432,17 +568,16 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
     
     try:
-        # Ensure Ollama is running
-        ensure_ollama_running()
+        if not args.dry_run:
+            # Ensure Ollama is running
+            ensure_ollama_running()
         
         # Initialize the event handler
-        event_handler = AudioFileHandler()
+        event_handler = AudioFileHandler(dry_run=args.dry_run)
         
         # Set up the observer with error handling
         observer = Observer()
         watch_path = os.getenv('WATCH_FOLDER')
-        if not watch_path:
-            raise ValueError("WATCH_FOLDER environment variable not set")
         
         observer.schedule(event_handler, watch_path, recursive=False)
         observer.start()

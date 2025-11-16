@@ -8,10 +8,14 @@ import warnings
 warnings.filterwarnings('ignore', message='Failed to launch Triton kernels')
 
 class WhisperTranscriber:
-    def __init__(self, model_size="medium"):
+    def __init__(self, model_size=None):
+        import os
+        if model_size is None:
+            model_size = os.getenv('WHISPER_MODEL_SIZE', 'medium')
         device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model = whisper.load_model(model_size).to(device)
         self.device = device
+        self.model_size = model_size
         # Default initial prompt for personal note-taking context
         self.default_prompt = (
             "This is a personal note or journal entry. "

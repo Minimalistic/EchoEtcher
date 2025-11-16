@@ -10,7 +10,7 @@ from .tag_manager import TagManager
 
 class OllamaProcessor:
     def __init__(self):
-        self.api_url = os.getenv('OLLAMA_API_URL')
+        self.api_url = os.getenv('OLLAMA_API_URL', 'http://localhost:11434/api/generate')
         self.model = os.getenv('OLLAMA_MODEL')
         if not self.model:
             raise ValueError("OLLAMA_MODEL must be set in environment variables")

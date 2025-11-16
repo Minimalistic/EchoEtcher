@@ -21,12 +21,17 @@ By using EchoEtcher, you acknowledge that you understand and accept the risks as
 
 ## Features
 
-- Monitors a selected folder for new audio files
-- Transcribes audio locally using Whisper
-- Processes transcriptions locally with Ollama
-- Auto-generates formatted Markdown notes with allowed tags
-- Links original audio files in Obsidian vault
-- Completely local processing - no cloud services required
+- **Folder Monitoring**: Monitors a selected folder (e.g., iCloud) for new audio files
+- **Local Transcription**: Transcribes audio locally using Whisper (configurable model size)
+- **AI Processing**: Processes transcriptions locally with Ollama
+- **Smart Note Generation**: Auto-generates formatted Markdown notes with allowed tags
+- **Audio Embedding**: Links original audio files in Obsidian vault
+- **iCloud Sync Support**: Handles iCloud file synchronization gracefully
+- **Error Handling**: Robust error handling with retry logic and error directory
+- **Processing Tracking**: Tracks processing time and provides detailed logging
+- **Configuration Validation**: Validates configuration on startup with helpful error messages
+- **CLI Options**: Dry-run mode, verbose logging, and version information
+- **Completely Local**: No cloud services required - all processing happens on your machine
 
 ## Prerequisites
 
@@ -77,14 +82,44 @@ When processing tags from the transcribed audio, EchoEtcher uses a unique approa
    ```bash
    python main.py
    ```
+
+### Command Line Options
+
+EchoEtcher supports several command-line options:
+
+- `--dry-run`: Test mode - scans and logs files but doesn't process them
+- `--verbose` or `-v`: Enable debug/verbose logging
+- `--version`: Show version information
+
+Examples:
+```bash
+# Normal operation
+python main.py
+
+# Test configuration without processing files
+python main.py --dry-run
+
+# Enable detailed logging
+python main.py --verbose
+```
 ## Configuration
 
 Edit the `.env` file to configure:
-- Audio input folder path
-- Obsidian vault path
-- Ollama model name and settings
-- Note template settings
-- Allowed tags file location
+
+### Required Settings
+- `WATCH_FOLDER`: Path to folder to watch for audio files (e.g., iCloud folder)
+- `OBSIDIAN_VAULT_PATH`: Path to your Obsidian vault root directory
+- `OLLAMA_MODEL`: Ollama model name to use (e.g., `mistral`, `llama2`)
+
+### Optional Settings
+- `NOTES_FOLDER`: Folder name within vault where notes are created (default: `notes`)
+- `OLLAMA_API_URL`: Ollama API endpoint (default: `http://localhost:11434/api/generate`)
+- `OLLAMA_TEMPERATURE`: Temperature for AI processing, 0.0-1.0 (default: `0.3`)
+- `OLLAMA_TIMEOUT`: API timeout in seconds (default: `120`)
+- `WHISPER_MODEL_SIZE`: Whisper model size - `tiny`, `base`, `small`, `medium`, `large`, `large-v2`, `large-v3` (default: `medium`)
+- `ALLOWED_TAGS_FILE`: Path to allowed tags file (default: `allowed_tags.md`)
+
+The application will validate your configuration on startup and provide helpful error messages if anything is missing or incorrect.
 
 ### Allowed Tags File
 

@@ -1,7 +1,14 @@
---extra-index-url https://download.pytorch.org/whl/cu118
-torch==2.6.0+cu118
+# PyTorch - use CPU version for macOS, CUDA version for Linux with GPU
+# For macOS (Apple Silicon or Intel), install with: pip install torch
+# For Linux with CUDA 11.8, uncomment the line below and comment out the torch line:
+# --extra-index-url https://download.pytorch.org/whl/cu118
+# torch==2.6.0+cu118
+torch>=2.0.0
 watchdog>=3.0.0
 openai-whisper>=20231117
 requests>=2.31.0
 python-dotenv>=1.0.0
 pydantic>=2.5.0
+
+# Note: Ollama is a separate service, not a Python package
+# Install it from https://ollama.ai/ and run 'ollama serve' separately
