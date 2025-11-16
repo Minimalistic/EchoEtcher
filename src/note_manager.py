@@ -132,41 +132,47 @@ class NoteManager:
         audio_rel_path = os.path.relpath(new_audio_path, self.vault_path)
         audio_rel_path = audio_rel_path.replace('\\', '/')  # Convert Windows path to forward slashes for markdown
         
-        # Build note content
-        note_content = []
+        # Build note content with proper formatting
+        note_parts = []
         
         # Add title
-        note_content.append(f"# {title}\n")
+        note_parts.append(f"# {title}")
+        note_parts.append("")  # Blank line after title
         
-        # Add audio player right after title
-        note_content.extend([
-            f"![[{audio_rel_path}]]\n"
-        ])
+        # Add audio player
+        note_parts.append(f"![[{audio_rel_path}]]")
+        note_parts.append("")  # Blank line after audio
         
         # Add tags if present
         if processed_content.get('tags'):
             # Strip any existing hashtags and add a single one
             formatted_tags = [tag.lstrip('#') for tag in processed_content.get('tags', [])]
-            note_content.append(f"{' '.join(['#' + tag for tag in formatted_tags])}\n")
+            note_parts.append(' '.join(['#' + tag for tag in formatted_tags]))
+            note_parts.append("")  # Blank line after tags
         
         # Add metadata section if there's interesting metadata
         if any(key in processed_content for key in ['language', 'confidence_issues', 'non_speech_sections']):
-            note_content.append("## Metadata")
+            note_parts.append("## Metadata")
             if processed_content.get('language'):
-                note_content.append(f"- Language: {processed_content['language']}")
+                note_parts.append(f"- Language: {processed_content['language']}")
             if processed_content.get('confidence_issues'):
-                note_content.append("- Low confidence sections noted in content with [uncertain] tags")
+                note_parts.append("- Low confidence sections noted in content with [uncertain] tags")
             if processed_content.get('non_speech_sections'):
-                note_content.append("- Contains non-speech sections (marked in content)")
-            note_content.append("")  # Add blank line after metadata
+                note_parts.append("- Contains non-speech sections (marked in content)")
+            note_parts.append("")  # Blank line after metadata
         
-        # Add content
-        note_content.append(processed_content.get('formatted_content', ''))
+        # Add formatted content (should already have proper paragraph breaks from Ollama)
+        formatted_content = processed_content.get('formatted_content', '').strip()
+        if formatted_content:
+            note_parts.append(formatted_content)
+        
+        # Join all parts with newlines (preserves paragraph breaks in formatted_content)
+        final_content = '\n'.join(note_parts)
         
         # Write the note
         try:
             with open(note_path, 'w', encoding='utf-8') as f:
-                f.write('\n'.join(note_content))
+                f.write(final_content)
             logging.info(f"Note created successfully at {note_path}")
         except Exception as e:
             logging.error(f"Failed to create note: {str(e)}")

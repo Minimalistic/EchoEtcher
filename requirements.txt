@@ -14,6 +14,7 @@ openai-whisper>=20231117
 requests>=2.31.0
 python-dotenv>=1.0.0
 pydantic>=2.5.0
+pyyaml>=6.0.0
 
 # Note: Ollama is a separate service, not a Python package
 # Install it from https://ollama.ai/ and run 'ollama serve' separately

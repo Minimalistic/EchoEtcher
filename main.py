@@ -425,6 +425,14 @@ class AudioFileHandler(FileSystemEventHandler):
             if low_confidence_segments:
                 logging.warning(f"Found {len(low_confidence_segments)} low confidence segments")
             
+            # Unload Whisper model to free memory before Ollama processing
+            # This enables sequential processing for better memory efficiency
+            # Only unload if sequential processing is enabled (default: True)
+            sequential_mode = os.getenv('SEQUENTIAL_PROCESSING', 'true').lower() == 'true'
+            if sequential_mode:
+                logging.info("Unloading Whisper model to free memory for Ollama processing...")
+                self.transcriber.unload_model()
+            
             # Process with Ollama
             processed_content = self.processor.process_transcription(transcription_data, file_path.name)
             
@@ -458,8 +466,8 @@ class AudioFileHandler(FileSystemEventHandler):
                 user_msg = f"Failed to transcribe audio file. This might be due to:\n  - Corrupted audio file\n  - Unsupported audio format\n  - Insufficient system resources\n  Original error: {error_msg}"
             elif "Ollama" in error_type or "connection" in error_msg.lower():
                 user_msg = f"Failed to connect to Ollama. Please ensure:\n  - Ollama is running (run 'ollama serve')\n  - The model '{os.getenv('OLLAMA_MODEL')}' is available (run 'ollama pull {os.getenv('OLLAMA_MODEL')}')\n  - Original error: {error_msg}"
-            elif "JSON" in error_type or "JSON" in error_msg:
-                user_msg = f"Failed to parse AI response. This might be due to:\n  - Model response format issues\n  - Network timeout\n  - Original error: {error_msg}"
+            elif "YAML" in error_type or "YAML" in error_msg or "frontmatter" in error_msg.lower():
+                user_msg = f"Failed to parse AI response. This might be due to:\n  - Model response format issues (expected YAML frontmatter)\n  - Network timeout\n  - Original error: {error_msg}"
             else:
                 user_msg = f"Unexpected error: {error_msg}"
             

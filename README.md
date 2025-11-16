@@ -130,7 +130,59 @@ Edit the `.env` file to configure:
 - `OLLAMA_TEMPERATURE`: Temperature for AI processing, 0.0-1.0 (default: `0.3`)
 - `OLLAMA_TIMEOUT`: API timeout in seconds (default: `120`)
 - `WHISPER_MODEL_SIZE`: Whisper model size - `tiny`, `base`, `small`, `medium`, `large`, `large-v2`, `large-v3` (default: `medium`)
+- `SEQUENTIAL_PROCESSING`: Enable sequential processing mode - unloads Whisper after transcription to free memory (default: `true`)
 - `ALLOWED_TAGS_FILE`: Path to allowed tags file (default: `allowed_tags.md`)
+
+### Hardware Recommendations
+
+EchoEtcher uses **sequential processing by default** to optimize memory usage. This means Whisper unloads after transcription, freeing memory for Ollama processing. This allows you to use larger, higher-quality models even on systems with limited VRAM/RAM.
+
+#### Recommended Configurations
+
+**For systems with 8GB VRAM (e.g., RTX 3060 Ti):**
+```bash
+WHISPER_MODEL_SIZE=medium
+OLLAMA_MODEL=mistral
+SEQUENTIAL_PROCESSING=true
+```
+This configuration uses Whisper `medium` (~5GB) and Mistral 7B (~4-5GB) sequentially, fitting comfortably within 8GB VRAM.
+
+**For systems with 16GB+ shared memory (e.g., MacBook Air M4):**
+```bash
+WHISPER_MODEL_SIZE=medium
+OLLAMA_MODEL=mistral
+SEQUENTIAL_PROCESSING=true
+```
+The same configuration works well on systems with more memory, providing excellent quality while maintaining efficient resource usage.
+
+**For systems with limited memory (<8GB):**
+```bash
+WHISPER_MODEL_SIZE=small
+OLLAMA_MODEL=phi-2
+SEQUENTIAL_PROCESSING=true
+```
+
+**For maximum quality (requires 16GB+ VRAM/RAM):**
+```bash
+WHISPER_MODEL_SIZE=large-v3
+OLLAMA_MODEL=mistral
+SEQUENTIAL_PROCESSING=true
+```
+
+#### Model Size Reference
+
+**Whisper Models:**
+- `tiny` (~1GB): Fast, basic quality
+- `base` (~1GB): Fast, good quality
+- `small` (~2GB): Fast, very good quality
+- `medium` (~5GB): Moderate speed, excellent quality ⭐ **Recommended**
+- `large-v3` (~10GB): Slower, best quality
+
+**Ollama Models:**
+- `tinyllama` (~2GB): Fast, basic quality
+- `phi-2` (~2GB): Fast, good quality
+- `mistral` (~4-5GB): Moderate speed, very good quality ⭐ **Recommended**
+- `llama2:7b` (~4-5GB): Moderate speed, very good quality
 
 The application will validate your configuration on startup and provide helpful error messages if anything is missing or incorrect.
 

@@ -4,6 +4,7 @@ import requests
 import logging
 import re
 import time
+import yaml
 from typing import Dict, Optional
 from pathlib import Path
 from .tag_manager import TagManager
@@ -36,40 +37,6 @@ class OllamaProcessor:
         # Normalize unicode quotes and dashes
         text = text.replace('"', '"').replace('"', '"').replace('—', '-')
         return text
-
-    def clean_json_string(self, text: str) -> str:
-        """Clean a string that should be valid JSON."""
-        # Log the original input for debugging
-        logging.debug(f"Original JSON string: {text[:200]}...")  # First 200 chars
-        
-        try:
-            # First try: direct JSON parsing
-            json.loads(text)
-            return text
-        except json.JSONDecodeError as e:
-            logging.info(f"Initial JSON parse failed: {str(e)}, attempting repairs...")
-            
-            # Replace single quotes with double quotes, but only for property names and string values
-            text = re.sub(r"'([^']*)':", r'"\1":', text)  # Fix property names
-            text = re.sub(r":\s*'([^']*)'", r':"\1"', text)  # Fix string values
-            
-            # Remove any trailing commas in objects and arrays
-            text = re.sub(r',(\s*[}\]])', r'\1', text)
-            
-            # Ensure property names are quoted
-            text = re.sub(r'(\{|\,)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', text)
-            
-            logging.debug(f"Cleaned JSON string: {text[:200]}...")  # First 200 chars
-            
-            # Verify the cleaning worked
-            try:
-                json.loads(text)
-                logging.info("JSON repair successful")
-                return text
-            except json.JSONDecodeError as e:
-                logging.error(f"JSON repair failed: {str(e)}")
-                logging.error(f"Failed JSON: {text}")
-                return text  # Return the cleaned version anyway, let the caller handle any remaining issues
 
     def attempt_json_repair(self, text: str) -> Optional[Dict]:
         """Attempt to repair malformed JSON response."""
@@ -157,20 +124,138 @@ class OllamaProcessor:
                     logging.error("All Ollama API attempts failed")
                     raise
 
+    def parse_yaml_frontmatter(self, text: str) -> Dict:
+        """
+        Parse YAML frontmatter from markdown text.
+        Expected format:
+        ---
+        title: ...
+        tags: [...]
+        ---
+        
+        Content here...
+        """
+        text = text.strip()
+        
+        # Check if it starts with frontmatter delimiter
+        if not text.startswith('---'):
+            # Try to find frontmatter if there's leading whitespace or text
+            # Some models might add explanatory text before the frontmatter
+            frontmatter_start = text.find('\n---')
+            if frontmatter_start != -1:
+                # Found frontmatter after some text, extract from there
+                text = text[frontmatter_start + 1:].strip()
+            else:
+                raise ValueError("Response does not contain YAML frontmatter delimiter (---)")
+        
+        # Find the end of frontmatter (second ---)
+        lines = text.split('\n')
+        if len(lines) < 2:
+            raise ValueError("Invalid YAML frontmatter format")
+        
+        # Find the closing --- (must be on its own line)
+        frontmatter_end = None
+        for i in range(1, len(lines)):
+            if lines[i].strip() == '---':
+                frontmatter_end = i
+                break
+        
+        if frontmatter_end is None:
+            raise ValueError("YAML frontmatter not properly closed (missing closing ---)")
+        
+        # Extract frontmatter (skip first line with ---)
+        frontmatter_lines = lines[1:frontmatter_end]
+        frontmatter_text = '\n'.join(frontmatter_lines)
+        
+        # Parse YAML
+        try:
+            frontmatter = yaml.safe_load(frontmatter_text)
+            if frontmatter is None:
+                frontmatter = {}  # Empty frontmatter
+            if not isinstance(frontmatter, dict):
+                raise ValueError("YAML frontmatter must be a dictionary")
+        except yaml.YAMLError as e:
+            raise ValueError(f"Invalid YAML in frontmatter: {str(e)}")
+        
+        # Extract content (everything after the closing ---)
+        content_lines = lines[frontmatter_end + 1:]
+        content = '\n'.join(content_lines).strip()
+        
+        # Build result dictionary
+        result = {
+            "title": frontmatter.get("title", ""),
+            "tags": frontmatter.get("tags", []),
+            "formatted_content": content
+        }
+        
+        # Validate required fields
+        if not result["title"]:
+            raise ValueError("YAML frontmatter missing required field: title")
+        
+        return result
+
     def clean_formatted_content(self, content: str) -> str:
-        """Clean the formatted content by removing prompt artifacts and transcription markers."""
-        # Remove any lines about allowed tags
+        """Clean and validate the formatted content with improved markdown processing."""
+        if not content:
+            return content
+        
+        # Remove any code block markers (```) that might be at the start or end
+        content = re.sub(r'^```+\s*\n?', '', content, flags=re.MULTILINE)
+        content = re.sub(r'\n?```+\s*$', '', content, flags=re.MULTILINE)
+        
+        # Remove any lines about allowed tags or instructions
         content = re.sub(r'You must only use tags from the ALLOWED TAGS list above\..*', '', content, flags=re.IGNORECASE | re.MULTILINE)
         content = re.sub(r'If no tags from the allowed list are relevant.*', '', content, flags=re.IGNORECASE | re.MULTILINE)
         
-        # Remove transcription markers and metadata
-        content = re.sub(r'\[uncertain\]', '', content)
+        # Remove transcription markers and metadata (but preserve [uncertain] if it's meaningful)
+        # Only remove pause/non-speech markers that are in brackets
         content = re.sub(r'\[Pause: [^\]]+\]', '', content)  # Remove pause markers
         content = re.sub(r'\[Non-speech section: [^\]]+\]', '', content)  # Remove non-speech markers
         content = re.sub(r'\[Low confidence section: [^\]]+\]', '', content)  # Remove confidence markers
         
-        # Remove any empty lines that might have been created
-        content = re.sub(r'\n\s*\n\s*\n', '\n\n', content)
+        # Fix common markdown issues
+        # Ensure headers have proper spacing
+        content = re.sub(r'^(#{1,6})\s*([^\n]+)', r'\1 \2', content, flags=re.MULTILINE)
+        # Fix headers without space after #
+        content = re.sub(r'^#+([^\s#])', r'# \1', content, flags=re.MULTILINE)
+        
+        # Normalize bullet points (ensure space after - or *)
+        # Note: - must be escaped or at end of character class to be literal
+        content = re.sub(r'^([-*])([^\s*\-])', r'\1 \2', content, flags=re.MULTILINE)
+        
+        # Remove trailing whitespace from lines
+        content = re.sub(r'[ \t]+$', '', content, flags=re.MULTILINE)
+        
+        # Ensure content starts and ends cleanly
+        content = content.strip()
+        
+        # Normalize paragraph breaks: preserve double newlines (paragraph breaks)
+        # but collapse excessive blank lines (more than 2 consecutive)
+        content = re.sub(r'\n{3,}', '\n\n', content)
+        
+        # Ensure proper spacing around headers (add blank line before if missing)
+        content = re.sub(r'([^\n])\n(#{1,6} )', r'\1\n\n\2', content)
+        # Ensure blank line after headers
+        content = re.sub(r'(#{1,6} [^\n]+)\n([^\n#])', r'\1\n\n\2', content)
+        
+        # Ensure proper spacing around lists
+        content = re.sub(r'([^\n])\n([-*] )', r'\1\n\n\2', content)  # Before list
+        content = re.sub(r'([-*] [^\n]+)\n([^\n\-*#])', r'\1\n\n\2', content)  # After list
+        
+        # If the content is all one paragraph (no double newlines), try to add breaks
+        # after sentences that end with periods followed by capital letters (likely topic changes)
+        # But only if there are no existing paragraph breaks
+        if '\n\n' not in content and len(content) > 200:
+            # Add paragraph breaks after sentences ending with . ! or ? followed by a capital letter
+            # This helps break up long paragraphs into more readable chunks
+            content = re.sub(r'([.!?])\s+([A-Z][a-z])', r'\1\n\n\2', content)
+            # Clean up any triple newlines this might create
+            content = re.sub(r'\n{3,}', '\n\n', content)
+        
+        # Final cleanup: remove any trailing code blocks or backticks
+        content = content.rstrip()
+        while content.endswith('`'):
+            content = content.rstrip('`').rstrip()
         
         return content.strip()
 
@@ -195,27 +280,37 @@ class OllamaProcessor:
             
             # Process segments to identify notable features
             segments_info = []
+            low_confidence_segments = []
+            
             for segment in transcription_data.get("segments", []):
                 # Calculate pause before this segment
                 if segments_info:  # Not the first segment
-                    pause_duration = segment["start"] - segments_info[-1]["end"]
-                    if pause_duration > 1.0:  # Only note significant pauses
-                        segments_info.append({
-                            "type": "pause",
-                            "duration": round(pause_duration, 1),
-                            "position": segment["start"]
-                        })
+                    last_item = segments_info[-1]
+                    if last_item["type"] == "segment":
+                        pause_duration = segment["start"] - last_item["end"]
+                        if pause_duration > 1.0:  # Only note significant pauses
+                            segments_info.append({
+                                "type": "pause",
+                                "duration": round(pause_duration, 1),
+                                "position": segment["start"]
+                            })
                 
                 # Add segment with confidence info
-                segments_info.append({
+                segment_info = {
                     "type": "segment",
                     "start": segment["start"],
                     "end": segment["end"],
                     "confidence": segment["confidence"],
-                    "no_speech_prob": segment["no_speech_prob"]
-                })
+                    "no_speech_prob": segment["no_speech_prob"],
+                    "text": segment.get("text", "")
+                }
+                segments_info.append(segment_info)
+                
+                # Track low confidence segments for better handling
+                if segment_info["confidence"] < -1.0 and segment_info["no_speech_prob"] < 0.5:
+                    low_confidence_segments.append(segment_info)
             
-            # Convert segments info to readable format
+            # Convert segments info to readable format for metadata
             for info in segments_info:
                 if info["type"] == "pause":
                     metadata.append(f"[Pause: {info['duration']}s at {info['position']}s]")
@@ -223,7 +318,11 @@ class OllamaProcessor:
                     if info["no_speech_prob"] > 0.5:  # Likely background noise or non-speech
                         metadata.append(f"[Non-speech section: {info['start']}-{info['end']}s]")
                     elif info["confidence"] < -1.0:  # Low confidence section
-                        metadata.append(f"[Low confidence section: {info['start']}-{info['end']}s]")
+                        metadata.append(f"[Low confidence section: {info['start']}-{info['end']}s, confidence: {info['confidence']:.2f}]")
+            
+            # Add summary of low confidence segments if any
+            if low_confidence_segments:
+                metadata.append(f"[Note: {len(low_confidence_segments)} low-confidence segments detected - review for accuracy]")
             
             metadata_str = "\n".join(metadata)
             
@@ -232,17 +331,37 @@ class OllamaProcessor:
 METADATA:
 {metadata_str}
 
-1. Format the transcription by:
-   - Using the metadata to inform natural breaks and section divisions
-   - Adding appropriate line breaks where pauses or topic changes occur
-   - Using markdown headers (# or ##) for major topic changes or sections
-   - Adding [uncertain] tags for low confidence sections
-   - Preserving the original meaning and content
-   - Using single line breaks between paragraphs
-2. Generate a clear, concise filename (without extension)
-3. Select the most relevant tags from ONLY the allowed tags list that apply to this content
+Your task is to transform this raw transcription into a well-formatted markdown note:
 
-IMPORTANT: Your response must be valid JSON with double quotes around property names and string values.
+1. FORMATTING GUIDELINES:
+   - CRITICAL: Use double line breaks (blank line) between paragraphs and distinct thoughts
+   - Each new topic, idea, or major thought should start a new paragraph with a blank line before it
+   - Use markdown headers (# for main sections, ## for subsections) when there are clear topic changes
+   - Use bullet points (- or *) for lists or key points
+   - Use **bold** for emphasis on important concepts
+   - Preserve natural flow and readability
+   - Add [uncertain] markers only for genuinely low-confidence sections (from metadata)
+   - Use single line breaks within paragraphs, double line breaks (blank line) between paragraphs
+   - Ensure proper capitalization and punctuation throughout
+   - DO NOT use code blocks (```) - just write plain markdown text
+
+2. CONTENT ORGANIZATION:
+   - Identify natural topic transitions based on pauses and content changes
+   - Group related thoughts into coherent paragraphs
+   - Create sections with headers when topics shift significantly
+   - Maintain the speaker's original meaning and intent
+
+3. TITLE GENERATION:
+   - Create a clear, descriptive filename (without extension)
+   - Use lowercase with hyphens (e.g., "meeting-notes-project-discussion")
+   - Keep it concise but informative (30-50 characters ideal)
+
+4. TAG SELECTION:
+   - Select ONLY from the ALLOWED TAGS list below
+   - Choose 2-5 most relevant tags that best describe the content
+   - If no tags are relevant, return an empty list
+
+IMPORTANT: Your response must use YAML frontmatter format (standard markdown with YAML metadata block).
 
 ALLOWED TAGS:
 {allowed_tags_str}
@@ -251,30 +370,32 @@ Original audio filename: {audio_filename}
 Transcription: {cleaned_transcription}
 
 You must ONLY use tags from the ALLOWED TAGS list above. Do not create new tags.
-If no tags from the allowed list are relevant, return an empty list.
+If no tags from the allowed list are relevant, use an empty list: []
 
-Respond in this exact format:
-{{
-    "title": "clear-descriptive-filename",
-    "tags": ["#tag1", "#tag2"],
-    "formatted_content": "The formatted transcription with single line breaks"
-}}"""
+Respond in this exact format (YAML frontmatter followed by markdown content):
+---
+title: clear-descriptive-filename
+tags: ["#tag1", "#tag2"]
+---
+
+The formatted transcription with proper markdown formatting goes here.
+Use proper paragraph breaks, headers, and formatting as described above."""
 
             response = self.call_ollama_with_retry(prompt)
             if not response or "response" not in response:
                 raise ValueError("Invalid response from Ollama")
 
             # Log the raw response for debugging
-            logging.debug(f"Raw Ollama response: {response['response'][:500]}...")
+            raw_response = response["response"]
+            logging.debug(f"Raw Ollama response: {raw_response[:500]}...")
 
             try:
-                # Clean the response string before attempting to parse JSON
-                cleaned_response = self.clean_json_string(response["response"])
-                result = json.loads(cleaned_response)
+                # Parse YAML frontmatter from the response
+                result = self.parse_yaml_frontmatter(raw_response)
                 
                 # Validate the result has required fields
                 if not all(k in result for k in ["title", "tags", "formatted_content"]):
-                    raise ValueError("Missing required fields in Ollama response")
+                    raise ValueError("Missing required fields in Ollama response (need: title, tags, formatted_content)")
                 
                 # Clean the formatted content
                 result["formatted_content"] = self.clean_formatted_content(result["formatted_content"])
@@ -284,10 +405,10 @@ Respond in this exact format:
                 
                 return result
                 
-            except json.JSONDecodeError as e:
-                logging.error(f"JSON decode error: {str(e)}")
-                logging.error(f"Problematic JSON: {cleaned_response[:500]}...")  # Log first 500 chars
-                raise ValueError(f"Invalid JSON in Ollama response: {str(e)}")
+            except (yaml.YAMLError, ValueError) as e:
+                logging.error(f"YAML frontmatter parse error: {str(e)}")
+                logging.error(f"Problematic response: {raw_response[:1000]}...")  # Log first 1000 chars
+                raise ValueError(f"Invalid YAML frontmatter in Ollama response: {str(e)}")
                 
         except Exception as e:
             logging.error(f"Error processing transcription: {str(e)}")
