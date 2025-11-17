@@ -60,13 +60,16 @@ class NoteManager:
         audio_folder.mkdir(parents=True, exist_ok=True)
         return audio_folder
 
-    def create_note(self, processed_content: Dict, audio_file: Path):
+    def create_note(self, processed_content: Dict, audio_file: Path) -> Dict:
         """
         Create a markdown note in the Obsidian vault
         
         Args:
             processed_content (Dict): Processed content from Ollama
             audio_file (Path): Path to the original audio file
+            
+        Returns:
+            Dict with 'note_path' and 'audio_path' keys
         """
         # Get source date from processed content or extract from filename
         source_date = processed_content.get('source_date')
@@ -174,6 +177,12 @@ class NoteManager:
             with open(note_path, 'w', encoding='utf-8') as f:
                 f.write(final_content)
             logging.info(f"Note created successfully at {note_path}")
+            
+            # Return paths for state tracking
+            return {
+                'note_path': note_path,
+                'audio_path': new_audio_path
+            }
         except Exception as e:
             logging.error(f"Failed to create note: {str(e)}")
             raise Exception(f"Failed to create note: {str(e)}")

@@ -159,27 +159,42 @@ def validate_config():
 from src.transcriber import WhisperTranscriber
 from src.processor import OllamaProcessor
 from src.note_manager import NoteManager
+from src.state_manager import StateManager
+from src.processing_queue import ProcessingQueue
 
 class AudioFileHandler(FileSystemEventHandler):
     def __init__(self, dry_run=False):
         self.dry_run = dry_run
         logging.info("Initializing AudioFileHandler...")
+        
+        # Initialize state manager for persistent tracking
+        self.state_manager = StateManager()
+        
+        # Initialize processing queue
+        max_workers = int(os.getenv('MAX_CONCURRENT_PROCESSING', '1'))
+        self.processing_queue = ProcessingQueue(max_workers=max_workers)
+        self.processing_queue.set_processor(self._process_audio_file)
+        
         if not self.dry_run:
             self.initialize_components()
-        self.processed_files = set()  # Track processed files
+            # Start processing queue workers
+            self.processing_queue.start_workers()
+        
+        # Track failed files and their attempt counts (in-memory for retry logic)
         self.failed_files = {}  # Track failed files and their attempt counts
         self.max_retry_attempts = 3  # Maximum number of retry attempts for failed files
         self.last_health_check = time.time()
         self.last_directory_scan = time.time()
         self.health_check_interval = 3600  # Run health check every hour
         self.directory_scan_interval = 300  # Scan directory every 5 minutes
-        self.max_processed_files = 1000  # Maximum number of processed files to track
         self.files_in_progress = {}  # Track files that are being monitored for stability
         self.stability_check_interval = 1  # Check file stability every second
         self.required_stable_time = 3  # File must be stable for 3 seconds
         self.max_wait_time = 60  # Maximum time to wait for file stability (1 minute)
         self.last_empty_notification = 0  # Track when we last notified about empty folder
         self.empty_notification_interval = 300  # How often to notify about empty folder (10 minutes)
+        self.last_stats_log = time.time()
+        self.stats_log_interval = 3600  # Log statistics every hour
         
         # Ensure error directory exists
         self.error_dir = Path(os.getenv('WATCH_FOLDER')) / 'errors'
@@ -207,13 +222,12 @@ class AudioFileHandler(FileSystemEventHandler):
         if current_time - self.last_health_check >= self.health_check_interval:
             logging.info("Performing periodic health check...")
             try:
-                # Clean up processed files set to prevent memory growth
-                if len(self.processed_files) > self.max_processed_files:
-                    logging.info("Cleaning up processed files tracking set")
-                    self.processed_files.clear()
+                # Clean up old database entries (keep last 90 days)
+                if not self.dry_run:
+                    self.state_manager.cleanup_old_entries(days_to_keep=90)
 
                 # Check Ollama connection
-                if not self.check_ollama_health():
+                if not self.dry_run and not self.check_ollama_health():
                     logging.warning("Ollama connection issue detected, reinitializing processor")
                     self.processor = OllamaProcessor()
 
@@ -224,6 +238,11 @@ class AudioFileHandler(FileSystemEventHandler):
                 logging.info("Health check completed successfully")
             except Exception as e:
                 logging.error(f"Error during health check: {str(e)}")
+        
+        # Log statistics periodically
+        if current_time - self.last_stats_log >= self.stats_log_interval:
+            self._log_statistics()
+            self.last_stats_log = current_time
 
         # Check if it's time to scan the directory
         if current_time - self.last_directory_scan >= self.directory_scan_interval:
@@ -273,13 +292,13 @@ class AudioFileHandler(FileSystemEventHandler):
                     file_info['last_stable_time'] = current_time
                 elif current_time - last_stable_time >= self.required_stable_time:
                     # File has been stable for required time
-                    logging.info(f"File {file_path} is stable, processing...")
-                    self._process_audio_file(Path(file_path))
+                    logging.info(f"File {file_path} is stable, adding to processing queue...")
+                    self._add_to_processing_queue(Path(file_path))
                     files_to_remove.append(file_path)
                 elif current_time - first_seen_time >= self.max_wait_time:
                     # File has been waiting too long
-                    logging.warning(f"File {file_path} exceeded maximum wait time, processing anyway...")
-                    self._process_audio_file(Path(file_path))
+                    logging.warning(f"File {file_path} exceeded maximum wait time, adding to queue anyway...")
+                    self._add_to_processing_queue(Path(file_path))
                     files_to_remove.append(file_path)
 
                 file_info['last_check_time'] = current_time
@@ -310,8 +329,8 @@ class AudioFileHandler(FileSystemEventHandler):
                 return
             
             if file_path.suffix.lower() in ['.mp3', '.wav', '.m4a']:
-                # Check if we've already processed this file
-                if file_path.name in self.processed_files:
+                # Check if we've already processed this file using state manager
+                if not self.dry_run and self.state_manager.is_processed(file_path):
                     logging.info(f"File already processed, skipping: {file_path}")
                     return
                 
@@ -328,7 +347,18 @@ class AudioFileHandler(FileSystemEventHandler):
             current_time = time.time()
             str_path = str(file_path)
             
-            # Check if file has previously failed
+            # Check if file has previously failed using state manager
+            if not self.dry_run:
+                file_info = self.state_manager.get_file_info(file_path)
+                if file_info and file_info.get('status') == 'failed':
+                    attempt_count = self.failed_files.get(str_path, 0)
+                    if attempt_count >= self.max_retry_attempts:
+                        logging.warning(f"File {file_path} has exceeded maximum retry attempts. Moving to error directory.")
+                        self.move_to_error_dir(file_path)
+                        return
+                    logging.info(f"Retrying file {file_path} (attempt {attempt_count + 1}/{self.max_retry_attempts})")
+            
+            # Check in-memory failed files tracking
             if str_path in self.failed_files:
                 attempts = self.failed_files[str_path]
                 if attempts >= self.max_retry_attempts:
@@ -348,6 +378,19 @@ class AudioFileHandler(FileSystemEventHandler):
                 logging.info(f"Started monitoring file: {file_path}")
         except Exception as e:
             logging.error(f"Error starting to monitor file {file_path}: {str(e)}")
+    
+    def _add_to_processing_queue(self, file_path: Path):
+        """Add a file to the processing queue."""
+        # Double-check it hasn't been processed
+        if not self.dry_run and self.state_manager.is_processed(file_path):
+            logging.info(f"File already processed, skipping: {file_path}")
+            return
+        
+        # Add to queue
+        if self.processing_queue.add_file(file_path):
+            logging.info(f"Added file to processing queue: {file_path}")
+        else:
+            logging.warning(f"Could not add file to queue (may already be queued): {file_path}")
 
     def move_to_error_dir(self, file_path):
         """Move a failed file to the error directory with metadata"""
@@ -396,17 +439,25 @@ class AudioFileHandler(FileSystemEventHandler):
             return None, None
 
     def _process_audio_file(self, file_path):
+        """Process an audio file. Called by the processing queue."""
+        start_time = time.time()
+        str_path = str(file_path)
+        file_hash = None
+        note_path = None
+        audio_path = None
+        transcription_language = None
+        
         try:
-            start_time = time.time()
             logging.info(f"Processing file: {file_path}")
             
             if self.dry_run:
                 logging.info(f"[DRY RUN] Would process: {file_path}")
-                logging.info(f"[DRY RUN] File size: {file_path.stat().st_size / 1024 / 1024:.2f} MB")
-                self.processed_files.add(file_path.name)
+                if file_path.exists():
+                    logging.info(f"[DRY RUN] File size: {file_path.stat().st_size / 1024 / 1024:.2f} MB")
                 return
             
-            str_path = str(file_path)
+            # Mark as processing in state manager
+            file_hash = self.state_manager.mark_processing(file_path)
             
             # Check if file exists and is accessible (with retry for iCloud sync)
             max_checks = 3
@@ -418,6 +469,8 @@ class AudioFileHandler(FileSystemEventHandler):
                     time.sleep(2)
                 else:
                     logging.debug(f"File not found after {max_checks} attempts (may have been moved): {file_path}")
+                    self.state_manager.mark_failed(file_path, "File not found after multiple attempts", 
+                                                  attempt_count=self.failed_files.get(str_path, 0) + 1)
                     return
             
             # Extract source date and time
@@ -428,8 +481,9 @@ class AudioFileHandler(FileSystemEventHandler):
             logging.info("Transcription completed successfully")
             
             # Log metadata information
-            if transcription_data.get("language"):
-                logging.info(f"Detected language: {transcription_data['language']}")
+            transcription_language = transcription_data.get("language")
+            if transcription_language:
+                logging.info(f"Detected language: {transcription_language}")
             
             # Log confidence information
             low_confidence_segments = [s for s in transcription_data.get("segments", []) 
@@ -456,13 +510,22 @@ class AudioFileHandler(FileSystemEventHandler):
             
             logging.info("Ollama processing completed")
             
-            # Create note
-            self.note_manager.create_note(processed_content, file_path)
+            # Create note (this also moves the audio file)
+            note_result = self.note_manager.create_note(processed_content, file_path)
+            note_path = note_result.get('note_path')
+            audio_path = note_result.get('audio_path')
+            
             processing_time = time.time() - start_time
             logging.info(f"Note created successfully for: {file_path} (took {processing_time:.1f}s)")
             
-            # Add to processed files
-            self.processed_files.add(file_path.name)
+            # Mark as successful in state manager
+            self.state_manager.mark_success(
+                file_path, 
+                processing_time,
+                note_path=note_path,
+                audio_path=audio_path,
+                transcription_language=transcription_language
+            )
             
             # Remove from failed files if it was there
             if str_path in self.failed_files:
@@ -486,16 +549,42 @@ class AudioFileHandler(FileSystemEventHandler):
             logging.error(f"Error processing {file_path}: {user_msg}")
             logging.exception("Full error trace:")
             
-            str_path = str(file_path)
             # Track the failure
-            self.failed_files[str_path] = self.failed_files.get(str_path, 0) + 1
+            attempt_count = self.failed_files.get(str_path, 0) + 1
+            self.failed_files[str_path] = attempt_count
             self.failed_files[str_path + '_last_error'] = error_msg
             
+            # Mark as failed in state manager
+            if not self.dry_run:
+                self.state_manager.mark_failed(file_path, error_msg, attempt_count)
+            
             # If we've exceeded max retries, move to error directory
-            if self.failed_files[str_path] >= self.max_retry_attempts:
+            if attempt_count >= self.max_retry_attempts:
                 logging.warning(f"File {file_path} has exceeded maximum retry attempts ({self.max_retry_attempts}). Moving to error directory.")
                 if not self.dry_run:
                     self.move_to_error_dir(file_path)
+    
+    def _log_statistics(self):
+        """Log processing statistics."""
+        try:
+            stats = self.state_manager.get_statistics()
+            queue_stats = self.processing_queue.get_queue_stats()
+            
+            logging.info("=" * 60)
+            logging.info("Processing Statistics:")
+            logging.info(f"  Total Success: {stats.get('total_success', 0)}")
+            logging.info(f"  Total Failed: {stats.get('total_failed', 0)}")
+            logging.info(f"  Success Rate: {stats.get('success_rate', 0)}%")
+            logging.info(f"  Files Processed Today: {stats.get('files_processed_today', 0)}")
+            logging.info(f"  Avg Processing Time: {stats.get('avg_processing_duration', 0):.1f}s")
+            logging.info(f"  Total Processing Time: {stats.get('total_processing_duration', 0):.1f}s")
+            logging.info("Queue Statistics:")
+            logging.info(f"  Queue Size: {queue_stats.get('queue_size', 0)}")
+            logging.info(f"  Pending: {queue_stats.get('pending', 0)}")
+            logging.info(f"  Processing: {queue_stats.get('processing', 0)}")
+            logging.info("=" * 60)
+        except Exception as e:
+            logging.error(f"Error logging statistics: {e}")
 
     def scan_directory(self):
         """Scan the watch directory for any unprocessed audio files"""
@@ -524,9 +613,15 @@ class AudioFileHandler(FileSystemEventHandler):
                 logging.info(f"Found {len(all_files)} audio files in watch directory")
                 for file_path in all_files:
                     str_path = str(file_path)
-                    if file_path.name not in self.processed_files and str_path not in self.files_in_progress:
-                        logging.info(f"Found new file: {file_path.name}")
-                        self.start_monitoring_file(file_path)
+                    # Check if already processed using state manager
+                    if not self.dry_run and self.state_manager.is_processed(file_path):
+                        continue
+                    # Check if already being monitored or queued
+                    if str_path not in self.files_in_progress:
+                        queue_status = self.processing_queue.get_job_status(file_path)
+                        if queue_status is None:  # Not in queue
+                            logging.info(f"Found new file: {file_path.name}")
+                            self.start_monitoring_file(file_path)
                 return True
             return False
             
@@ -619,11 +714,15 @@ Examples:
     
     # Set up signal handlers for graceful shutdown
     observer = None
+    event_handler = None
+    
     def signal_handler(signum, frame):
         logging.info(f"Received signal {signum}. Initiating graceful shutdown...")
         if observer:
             observer.stop()
             observer.join()
+        if event_handler and hasattr(event_handler, 'processing_queue'):
+            event_handler.processing_queue.stop_workers(wait=True, timeout=10)
         logging.info("Shutdown complete")
         sys.exit(0)
     
@@ -635,7 +734,7 @@ Examples:
             # Ensure Ollama is running
             ensure_ollama_running()
         
-        # Initialize the event handler
+        # Initialize the event handler (this also starts the processing queue)
         event_handler = AudioFileHandler(dry_run=args.dry_run)
         
         # Set up the observer with error handling
