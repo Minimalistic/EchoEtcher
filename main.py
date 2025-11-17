@@ -160,7 +160,7 @@ from src.transcriber import WhisperTranscriber
 from src.processor import OllamaProcessor
 from src.note_manager import NoteManager
 from src.state_manager import StateManager
-from src.processing_queue import ProcessingQueue
+from src.processing_queue import ProcessingQueue, ProcessingStatus
 
 class AudioFileHandler(FileSystemEventHandler):
     def __init__(self, dry_run=False):
@@ -367,30 +367,51 @@ class AudioFileHandler(FileSystemEventHandler):
                     return
                 logging.info(f"Retrying file {file_path} (attempt {attempts + 1}/{self.max_retry_attempts})")
             
-            if str_path not in self.files_in_progress:
-                size = file_path.stat().st_size
-                self.files_in_progress[str_path] = {
-                    'first_seen_time': current_time,
-                    'last_check_time': current_time,
-                    'last_size': size,
-                    'last_stable_time': current_time
-                }
-                logging.info(f"Started monitoring file: {file_path}")
+            # Check if already being monitored
+            if str_path in self.files_in_progress:
+                logging.debug(f"File already being monitored: {file_path}")
+                return
+            
+            # Check if already in processing queue
+            if not self.dry_run:
+                queue_status = self.processing_queue.get_job_status(file_path)
+                if queue_status in [ProcessingStatus.PENDING, ProcessingStatus.PROCESSING]:
+                    logging.info(f"File already in processing queue (status: {queue_status}), skipping monitoring: {file_path}")
+                    return
+            
+            # Start monitoring the file
+            size = file_path.stat().st_size
+            self.files_in_progress[str_path] = {
+                'first_seen_time': current_time,
+                'last_check_time': current_time,
+                'last_size': size,
+                'last_stable_time': current_time
+            }
+            logging.info(f"Started monitoring file: {file_path}")
         except Exception as e:
             logging.error(f"Error starting to monitor file {file_path}: {str(e)}")
     
     def _add_to_processing_queue(self, file_path: Path):
         """Add a file to the processing queue."""
-        # Double-check it hasn't been processed
-        if not self.dry_run and self.state_manager.is_processed(file_path):
-            logging.info(f"File already processed, skipping: {file_path}")
-            return
-        
-        # Add to queue
-        if self.processing_queue.add_file(file_path):
-            logging.info(f"Added file to processing queue: {file_path}")
-        else:
-            logging.warning(f"Could not add file to queue (may already be queued): {file_path}")
+        try:
+            # Double-check it hasn't been processed
+            if not self.dry_run and self.state_manager.is_processed(file_path):
+                logging.info(f"File already processed, skipping: {file_path}")
+                return
+            
+            # Check if already in queue before attempting to add
+            queue_status = self.processing_queue.get_job_status(file_path)
+            if queue_status in [ProcessingStatus.PENDING, ProcessingStatus.PROCESSING]:
+                logging.info(f"File already in processing queue (status: {queue_status}), skipping: {file_path}")
+                return
+            
+            # Add to queue
+            if self.processing_queue.add_file(file_path):
+                logging.info(f"Added file to processing queue: {file_path}")
+            else:
+                logging.warning(f"Could not add file to queue (may already be queued): {file_path}")
+        except Exception as e:
+            logging.error(f"Error adding file to processing queue {file_path}: {e}", exc_info=True)
 
     def move_to_error_dir(self, file_path):
         """Move a failed file to the error directory with metadata"""

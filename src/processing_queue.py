@@ -78,7 +78,7 @@ class ProcessingQueue:
             if str_path in self.jobs:
                 job = self.jobs[str_path]
                 if job.status in [ProcessingStatus.PENDING, ProcessingStatus.PROCESSING]:
-                    logging.debug(f"File already in queue: {file_path}")
+                    logging.info(f"File already in queue (status: {job.status}): {file_path}")
                     return False
             
             # Create new job
