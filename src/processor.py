@@ -5,7 +5,7 @@ import logging
 import re
 import time
 import yaml
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 from pathlib import Path
 from .tag_manager import TagManager
 
@@ -185,7 +185,8 @@ class OllamaProcessor:
         result = {
             "title": frontmatter.get("title", ""),
             "tags": frontmatter.get("tags", []),
-            "formatted_content": content
+            "formatted_content": content,
+            "ai_summary": frontmatter.get("summary", "").strip()
         }
         
         # Validate required fields
@@ -193,6 +194,34 @@ class OllamaProcessor:
             raise ValueError("YAML frontmatter missing required field: title")
         
         return result
+
+    def extract_summary_if_present(self, content: str) -> Tuple[str, str]:
+        """
+        Extract AI-generated summary paragraphs if present, returning (summary, main_content).
+        Only extracts clearly meta-commentary paragraphs, not legitimate spoken content.
+        
+        Returns:
+            tuple: (summary_text, main_content) - summary will be empty string if none found
+        """
+        if not content:
+            return "", content
+        
+        # Look for meta-commentary paragraphs that are clearly AI-generated summaries
+        # These typically appear at the end and reference "this transcription/audio note" in third person
+        # Pattern: Paragraphs that start with "This transcription/audio note/recording discusses/is about..."
+        # We're being conservative - only matching clear meta-commentary, not legitimate speech
+        
+        summary_pattern = r'\n\n\s*(This (?:transcription|audio note|recording|note|audio)|The (?:transcription|audio note|recording|note)).*?(?:discusses|is about|describes|covers|mentions|refers to|is intended for|is for).*?(?=\n\n|\n#|$)'
+        
+        match = re.search(summary_pattern, content, flags=re.IGNORECASE | re.DOTALL)
+        if match:
+            # Found a summary paragraph - extract it
+            summary_text = match.group(0).strip()
+            # Remove it from the main content
+            main_content = content[:match.start()] + content[match.end():]
+            return summary_text, main_content.strip()
+        
+        return "", content
 
     def clean_formatted_content(self, content: str) -> str:
         """Clean and validate the formatted content with improved markdown processing."""
@@ -361,6 +390,12 @@ Your task is to transform this raw transcription into a well-formatted markdown 
    - Choose 2-5 most relevant tags that best describe the content
    - If no tags are relevant, return an empty list
 
+5. SUMMARY GENERATION:
+   - Create a brief 1-2 sentence summary of the transcription content
+   - This summary will be displayed at the top of the note
+   - Focus on the main topic or key points discussed
+   - Keep it concise and informative
+
 IMPORTANT: Your response must use YAML frontmatter format (standard markdown with YAML metadata block).
 
 ALLOWED TAGS:
@@ -376,10 +411,11 @@ Respond in this exact format (YAML frontmatter followed by markdown content):
 ---
 title: clear-descriptive-filename
 tags: ["#tag1", "#tag2"]
+summary: "Brief 1-2 sentence summary of the transcription content"
 ---
 
 The formatted transcription with proper markdown formatting goes here.
-Use proper paragraph breaks, headers, and formatting as described above."""
+ONLY include the formatted transcription content - do NOT add summaries or explanations in the body."""
 
             response = self.call_ollama_with_retry(prompt)
             if not response or "response" not in response:
@@ -399,6 +435,13 @@ Use proper paragraph breaks, headers, and formatting as described above."""
                 
                 # Clean the formatted content
                 result["formatted_content"] = self.clean_formatted_content(result["formatted_content"])
+                
+                # If summary wasn't in frontmatter, try to extract it from content
+                if not result.get("ai_summary"):
+                    summary, main_content = self.extract_summary_if_present(result["formatted_content"])
+                    if summary:
+                        result["ai_summary"] = self.clean_formatted_content(summary)
+                        result["formatted_content"] = self.clean_formatted_content(main_content)
                 
                 # Validate tags are from allowed list
                 result["tags"] = [tag for tag in result["tags"] if tag in allowed_tags]

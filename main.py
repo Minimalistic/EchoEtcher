@@ -276,35 +276,46 @@ class AudioFileHandler(FileSystemEventHandler):
 
         for file_path, file_info in self.files_in_progress.items():
             try:
-                if not Path(file_path).exists():
+                file_path_obj = Path(file_path)
+                if not file_path_obj.exists():
+                    logging.debug(f"File no longer exists, removing from monitoring: {file_path}")
                     files_to_remove.append(file_path)
                     continue
 
-                current_size = Path(file_path).stat().st_size
+                current_size = file_path_obj.stat().st_size
                 last_check_time = file_info['last_check_time']
                 last_size = file_info['last_size']
                 first_seen_time = file_info['first_seen_time']
                 last_stable_time = file_info.get('last_stable_time', current_time)
+                
+                time_since_stable = current_time - last_stable_time
+                time_since_first_seen = current_time - first_seen_time
 
                 # Update size information
                 if current_size != last_size:
+                    logging.debug(f"File size changed: {file_path} ({last_size} -> {current_size} bytes), resetting stability timer")
                     file_info['last_size'] = current_size
                     file_info['last_stable_time'] = current_time
-                elif current_time - last_stable_time >= self.required_stable_time:
+                elif time_since_stable >= self.required_stable_time:
                     # File has been stable for required time
-                    logging.info(f"File {file_path} is stable, adding to processing queue...")
-                    self._add_to_processing_queue(Path(file_path))
+                    logging.info(f"File {file_path} is stable (stable for {time_since_stable:.1f}s), adding to processing queue...")
+                    self._add_to_processing_queue(file_path_obj)
                     files_to_remove.append(file_path)
-                elif current_time - first_seen_time >= self.max_wait_time:
+                elif time_since_first_seen >= self.max_wait_time:
                     # File has been waiting too long
-                    logging.warning(f"File {file_path} exceeded maximum wait time, adding to queue anyway...")
-                    self._add_to_processing_queue(Path(file_path))
+                    logging.warning(f"File {file_path} exceeded maximum wait time ({time_since_first_seen:.1f}s), adding to queue anyway...")
+                    self._add_to_processing_queue(file_path_obj)
                     files_to_remove.append(file_path)
+                else:
+                    # Log progress periodically (every 5 seconds)
+                    if int(time_since_first_seen) % 5 == 0 and int(time_since_first_seen) > 0:
+                        logging.debug(f"File still being monitored: {file_path} (stable for {time_since_stable:.1f}s, total wait: {time_since_first_seen:.1f}s)")
 
                 file_info['last_check_time'] = current_time
 
             except Exception as e:
                 logging.error(f"Error checking file {file_path}: {str(e)}")
+                logging.exception("Full error trace:")
                 files_to_remove.append(file_path)
 
         # Remove processed or errored files
@@ -347,6 +358,34 @@ class AudioFileHandler(FileSystemEventHandler):
             current_time = time.time()
             str_path = str(file_path)
             
+            logging.debug(f"Attempting to start monitoring file: {file_path}")
+            
+            # Check if file exists and is accessible (with retry for iCloud sync)
+            max_checks = 3
+            file_exists = False
+            file_size = 0
+            for check in range(max_checks):
+                try:
+                    if file_path.exists():
+                        file_size = file_path.stat().st_size
+                        if file_size > 0:  # Skip empty files (iCloud placeholders)
+                            file_exists = True
+                            break
+                        else:
+                            logging.debug(f"File exists but is empty (iCloud placeholder?), attempt {check + 1}/{max_checks}: {file_path}")
+                    else:
+                        logging.debug(f"File does not exist yet, attempt {check + 1}/{max_checks}: {file_path}")
+                except (OSError, PermissionError) as e:
+                    logging.debug(f"Error accessing file, attempt {check + 1}/{max_checks}: {e}")
+                
+                if check < max_checks - 1:
+                    time.sleep(1)  # Wait 1 second before retry
+            
+            if not file_exists:
+                logging.warning(f"File not accessible or is empty after {max_checks} attempts (may still be syncing from iCloud): {file_path}")
+                logging.info(f"Will retry on next directory scan. File path: {file_path}")
+                return
+            
             # Check if file has previously failed using state manager
             if not self.dry_run:
                 file_info = self.state_manager.get_file_info(file_path)
@@ -380,16 +419,16 @@ class AudioFileHandler(FileSystemEventHandler):
                     return
             
             # Start monitoring the file
-            size = file_path.stat().st_size
             self.files_in_progress[str_path] = {
                 'first_seen_time': current_time,
                 'last_check_time': current_time,
-                'last_size': size,
+                'last_size': file_size,
                 'last_stable_time': current_time
             }
-            logging.info(f"Started monitoring file: {file_path}")
+            logging.info(f"Started monitoring file: {file_path} (size: {file_size} bytes)")
         except Exception as e:
             logging.error(f"Error starting to monitor file {file_path}: {str(e)}")
+            logging.exception("Full error trace:")
     
     def _add_to_processing_queue(self, file_path: Path):
         """Add a file to the processing queue."""

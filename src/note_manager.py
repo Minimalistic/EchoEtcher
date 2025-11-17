@@ -170,6 +170,16 @@ class NoteManager:
             note_parts.append(' '.join(['#' + tag for tag in formatted_tags]))
             note_parts.append("")  # Blank line after tags
         
+        # Always add AI summary section
+        note_parts.append("## AI Summary")
+        note_parts.append("")
+        ai_summary = processed_content.get('ai_summary', '').strip()
+        if ai_summary:
+            note_parts.append(ai_summary)
+        else:
+            note_parts.append("*No summary available*")
+        note_parts.append("")  # Blank line after summary
+        
         # Add metadata section if there's interesting metadata
         if any(key in processed_content for key in ['language', 'confidence_issues', 'non_speech_sections']):
             note_parts.append("## Metadata")
