@@ -603,7 +603,15 @@ class AudioFileHandler(FileSystemEventHandler):
             logging.info(f"  Queue Size: {queue_stats.get('queue_size', 0)}")
             logging.info(f"  Pending: {queue_stats.get('pending', 0)}")
             logging.info(f"  Processing: {queue_stats.get('processing', 0)}")
+            logging.info(f"  Completed: {queue_stats.get('completed', 0)}")
+            logging.info(f"  Failed: {queue_stats.get('failed', 0)}")
+            logging.info(f"  Workers: {queue_stats.get('workers_alive', 0)}/{queue_stats.get('workers_total', 0)} alive")
+            logging.info(f"  Queue Running: {queue_stats.get('is_running', False)}")
             logging.info("=" * 60)
+            
+            # Warn if workers are dead
+            if queue_stats.get('workers_alive', 0) < queue_stats.get('workers_total', 0):
+                logging.warning(f"WARNING: {queue_stats.get('workers_total', 0) - queue_stats.get('workers_alive', 0)} worker thread(s) are dead!")
         except Exception as e:
             logging.error(f"Error logging statistics: {e}")
 

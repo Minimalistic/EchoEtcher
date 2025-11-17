@@ -25,6 +25,22 @@ class NoteManager:
         # Trim spaces from ends
         return sanitized.strip()
 
+    def _format_title_for_filename(self, title: str) -> str:
+        """
+        Format title for use in filename: replace hyphens with spaces and capitalize words
+        Example: "frustration-at-work" -> "Frustration at Work"
+        """
+        # First sanitize to remove invalid characters
+        sanitized = self._sanitize_filename(title)
+        # Replace hyphens and underscores with spaces
+        sanitized = re.sub(r'[-_]', ' ', sanitized)
+        # Replace multiple spaces with single space
+        sanitized = re.sub(r'\s+', ' ', sanitized)
+        # Capitalize each word (Title Case)
+        words = sanitized.split()
+        capitalized_words = [word.capitalize() for word in words]
+        return ' '.join(capitalized_words).strip()
+
     def _extract_datetime_from_filename(self, filename: Path) -> tuple:
         """
         Extract date and time from filename if it starts with a date pattern YYYY-MM-DD
@@ -92,8 +108,9 @@ class NoteManager:
             date_time = now.strftime("%Y-%m-%d_%I-%M%p")
             
         title = processed_content.get('title', 'Untitled Note')
-        sanitized_title = self._sanitize_filename(title[:30])
-        new_audio_name = f"{date_time}_{sanitized_title}{audio_file.suffix}"
+        # Format title for filename: capitalize words and use spaces instead of hyphens
+        formatted_title = self._format_title_for_filename(title[:30])
+        new_audio_name = f"{date_time}_{formatted_title}{audio_file.suffix}"
         new_audio_path = audio_folder / new_audio_name
         
         # Move audio file to audio folder if it's not already there
@@ -128,7 +145,7 @@ class NoteManager:
                 raise Exception(f"Failed to move audio file: {str(e)}")
         
         # Create the note with matching naming convention
-        note_filename = f"{date_time}_{sanitized_title}.md"
+        note_filename = f"{date_time}_{formatted_title}.md"
         note_path = self.notes_folder / note_filename
         
         # Create relative link to audio file

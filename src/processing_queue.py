@@ -167,6 +167,9 @@ class ProcessingQueue:
     
     def _worker(self):
         """Worker thread that processes jobs from the queue."""
+        thread_name = threading.current_thread().name
+        logging.debug(f"Worker thread {thread_name} started")
+        
         while self.is_running:
             try:
                 # Get job from queue with timeout
@@ -177,7 +180,10 @@ class ProcessingQueue:
                 
                 # None is a sentinel to stop
                 if job is None:
+                    logging.debug(f"Worker thread {thread_name} received stop signal")
                     break
+                
+                logging.debug(f"Worker thread {thread_name} picked up job: {job.file_path}")
                 
                 # Process the job
                 self._process_job(job)
@@ -185,8 +191,12 @@ class ProcessingQueue:
                 # Mark task as done
                 self.queue.task_done()
                 
+                logging.debug(f"Worker thread {thread_name} completed job: {job.file_path}")
+                
             except Exception as e:
-                logging.error(f"Error in worker thread: {e}", exc_info=True)
+                logging.error(f"Error in worker thread {thread_name}: {e}", exc_info=True)
+        
+        logging.debug(f"Worker thread {thread_name} exiting")
     
     def _process_job(self, job: ProcessingJob):
         """
@@ -205,9 +215,15 @@ class ProcessingQueue:
             
             logging.info(f"Processing file: {job.file_path}")
             
+            # Verify file still exists before processing
+            if not job.file_path.exists():
+                raise FileNotFoundError(f"File no longer exists: {job.file_path}")
+            
             # Call the processor callback
             if self.processor_callback:
                 self.processor_callback(job.file_path)
+            else:
+                raise ValueError("No processor callback set")
             
             # Mark as completed
             with self.jobs_lock:
@@ -222,7 +238,7 @@ class ProcessingQueue:
             
         except Exception as e:
             error_msg = str(e)
-            logging.error(f"Error processing {job.file_path}: {error_msg}")
+            logging.error(f"Error processing {job.file_path}: {error_msg}", exc_info=True)
             
             with self.jobs_lock:
                 job.status = ProcessingStatus.FAILED
@@ -270,12 +286,18 @@ class ProcessingQueue:
             failed = sum(1 for job in self.jobs.values() 
                         if job.status == ProcessingStatus.FAILED)
         
+        # Check if workers are still alive
+        alive_workers = sum(1 for worker in self.workers if worker.is_alive())
+        
         return {
             'queue_size': self.queue.qsize(),
             'pending': pending,
             'processing': processing,
             'completed': completed,
             'failed': failed,
-            'total_tracked': len(self.jobs)
+            'total_tracked': len(self.jobs),
+            'workers_alive': alive_workers,
+            'workers_total': len(self.workers),
+            'is_running': self.is_running
         }
 
