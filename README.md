@@ -89,8 +89,17 @@ When processing tags from the transcribed audio, EchoEtcher uses a unique approa
    pip install -r requirements.txt
    ```
 4. Copy `.env.example` to `.env` and configure your paths
-5. With Ollama.ai installed locally, open a new terminal and run `ollama pull mistral` (or whatever model you want to use)
-6. Ensure the Ollama model you want to use is set in the `.env` file (By default the example .env is set to `mistral`)
+5. With Ollama.ai installed locally, pull the models you need:
+   ```bash
+   # Pull a text model (required)
+   ollama pull mistral
+   
+   # Pull a vision model for image analysis (optional but recommended)
+   ollama pull llava
+   ```
+6. Configure your models in the `.env` file:
+   - Set `OLLAMA_MODEL=mistral` (or your preferred text model)
+   - Set `OLLAMA_VISION_MODEL=llava` (optional - for image analysis)
 7. Ensure Ollama is running locally by running `ollama serve`
 8. Run the watcher:
    ```bash
@@ -123,10 +132,11 @@ Edit the `.env` file to configure:
 ### Required Settings
 - `WATCH_FOLDER`: Path to folder to watch for audio files (e.g., iCloud folder)
 - `OBSIDIAN_VAULT_PATH`: Path to your Obsidian vault root directory
-- `OLLAMA_MODEL`: Ollama model name to use (e.g., `mistral`, `llama2`)
+- `OLLAMA_MODEL`: Ollama model name to use for text processing (e.g., `mistral`, `llama2`)
 
 ### Optional Settings
 - `NOTES_FOLDER`: Folder name within vault where notes are created (default: `notes`)
+- `OLLAMA_VISION_MODEL`: Ollama vision model for image analysis (e.g., `llava`, `bakllava`). If not set, uses `OLLAMA_MODEL` for both text and vision
 - `OLLAMA_API_URL`: Ollama API endpoint (default: `http://localhost:11434/api/generate`)
 - `OLLAMA_TEMPERATURE`: Temperature for AI processing, 0.0-1.0 (default: `0.3`)
 - `OLLAMA_TIMEOUT`: API timeout in seconds (default: `120`)

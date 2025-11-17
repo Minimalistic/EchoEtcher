@@ -114,8 +114,15 @@ def validate_config():
     required_vars = {
         'WATCH_FOLDER': 'Path to folder to watch for audio files',
         'OBSIDIAN_VAULT_PATH': 'Path to Obsidian vault root directory',
-        'OLLAMA_MODEL': 'Ollama model name to use for processing'
+        'OLLAMA_MODEL': 'Ollama model name to use for text processing (e.g., mistral)'
     }
+    
+    # Optional: Check if vision model is set (will fall back to main model if not)
+    vision_model = os.getenv('OLLAMA_VISION_MODEL')
+    if vision_model:
+        logging.info(f"Vision model configured: {vision_model} (for image analysis)")
+    else:
+        logging.info("No OLLAMA_VISION_MODEL set - will use OLLAMA_MODEL for both text and vision")
     
     missing = []
     invalid_paths = []
@@ -156,11 +163,11 @@ def validate_config():
     
     logging.info("Configuration validation passed")
 
-from src.transcriber import WhisperTranscriber
 from src.processor import OllamaProcessor
 from src.note_manager import NoteManager
 from src.state_manager import StateManager
 from src.processing_queue import ProcessingQueue, ProcessingStatus
+from src.content_processor_manager import ContentProcessorManager
 
 class AudioFileHandler(FileSystemEventHandler):
     def __init__(self, dry_run=False):
@@ -175,10 +182,18 @@ class AudioFileHandler(FileSystemEventHandler):
         self.processing_queue = ProcessingQueue(max_workers=max_workers)
         self.processing_queue.set_processor(self._process_audio_file)
         
+        # Initialize components (needed even in dry_run for file type detection)
         if not self.dry_run:
             self.initialize_components()
             # Start processing queue workers
             self.processing_queue.start_workers()
+        else:
+            # In dry_run mode, still initialize the content processor manager for file type detection
+            try:
+                self.content_processor_manager = ContentProcessorManager()
+                logging.info("Content processor manager initialized (dry-run mode)")
+            except Exception as e:
+                logging.warning(f"Could not initialize content processor manager in dry-run: {e}")
         
         # Track failed files and their attempt counts (in-memory for retry logic)
         self.failed_files = {}  # Track failed files and their attempt counts
@@ -188,9 +203,11 @@ class AudioFileHandler(FileSystemEventHandler):
         self.health_check_interval = 3600  # Run health check every hour
         self.directory_scan_interval = 300  # Scan directory every 5 minutes
         self.files_in_progress = {}  # Track files that are being monitored for stability
+        self.folders_in_progress = {}  # Track folders that are being monitored for completion
         self.stability_check_interval = 1  # Check file stability every second
         self.required_stable_time = 3  # File must be stable for 3 seconds
         self.max_wait_time = 60  # Maximum time to wait for file stability (1 minute)
+        self.folder_completion_timeout = 30  # Wait 30 seconds after last file addition before processing folder
         self.last_empty_notification = 0  # Track when we last notified about empty folder
         self.empty_notification_interval = 300  # How often to notify about empty folder (10 minutes)
         self.last_stats_log = time.time()
@@ -206,8 +223,8 @@ class AudioFileHandler(FileSystemEventHandler):
     def initialize_components(self):
         """Initialize or reinitialize components with error handling"""
         try:
-            self.transcriber = WhisperTranscriber()
-            logging.info("Whisper model loaded successfully")
+            self.content_processor_manager = ContentProcessorManager()
+            logging.info("Content processor manager initialized")
             self.processor = OllamaProcessor()
             logging.info("Ollama processor initialized")
             self.note_manager = NoteManager()
@@ -230,6 +247,10 @@ class AudioFileHandler(FileSystemEventHandler):
                 if not self.dry_run and not self.check_ollama_health():
                     logging.warning("Ollama connection issue detected, reinitializing processor")
                     self.processor = OllamaProcessor()
+                
+                # Unload models to free memory
+                if not self.dry_run and hasattr(self, 'content_processor_manager'):
+                    self.content_processor_manager.unload_models()
 
                 # Force garbage collection
                 gc.collect()
@@ -260,6 +281,10 @@ class AudioFileHandler(FileSystemEventHandler):
         # Check files in progress
         if self.files_in_progress:
             self.check_files_in_progress()
+        
+        # Check folders in progress
+        if self.folders_in_progress:
+            self.check_folders_in_progress()
 
     def check_ollama_health(self):
         """Check if Ollama is responsive"""
@@ -323,11 +348,28 @@ class AudioFileHandler(FileSystemEventHandler):
             self.files_in_progress.pop(file_path, None)
 
     def on_created(self, event):
-        if event.is_directory:
-            return
-        
         try:
-            file_path = Path(event.src_path)
+            path = Path(event.src_path)
+            
+            # Handle folder creation
+            if event.is_directory:
+                # Skip the errors folder and anything inside it
+                if path == self.error_dir or self.error_dir in path.parents:
+                    logging.debug(f"Skipping errors folder or folder inside errors: {path}")
+                    return
+                
+                if not self.dry_run and hasattr(self, 'content_processor_manager') and self.content_processor_manager.can_process(path):
+                    logging.info(f"New folder detected: {path}")
+                    self.start_monitoring_folder(path)
+                return
+            
+            # Handle file creation
+            file_path = path
+            
+            # Skip files in the errors folder
+            if self.error_dir in file_path.parents or file_path.parent == self.error_dir:
+                logging.debug(f"Skipping file in errors folder: {file_path}")
+                return
             
             # Skip iCloud placeholder files
             if file_path.name.endswith('.icloud'):
@@ -339,14 +381,27 @@ class AudioFileHandler(FileSystemEventHandler):
                 logging.debug(f"Skipping empty file (likely iCloud placeholder): {file_path}")
                 return
             
-            if file_path.suffix.lower() in ['.mp3', '.wav', '.m4a']:
+            # Check if file is inside a folder we're monitoring
+            parent_folder = file_path.parent
+            if str(parent_folder) in self.folders_in_progress:
+                # File added to a monitored folder - update folder monitoring
+                logging.debug(f"File added to monitored folder: {file_path.name} in {parent_folder.name}")
+                self.folders_in_progress[str(parent_folder)]['last_file_added'] = time.time()
+                self.folders_in_progress[str(parent_folder)]['file_count'] = len([f for f in parent_folder.iterdir() if f.is_file() and not f.name.startswith('.')])
+                return  # Don't process individual files in monitored folders
+            
+            # Check if we can process this file type
+            if not self.dry_run and hasattr(self, 'content_processor_manager') and self.content_processor_manager.can_process(file_path):
                 # Check if we've already processed this file using state manager
-                if not self.dry_run and self.state_manager.is_processed(file_path):
+                if self.state_manager.is_processed(file_path):
                     logging.info(f"File already processed, skipping: {file_path}")
                     return
                 
-                logging.info(f"New audio file detected: {file_path}")
+                file_type = self.content_processor_manager.get_processor(file_path).get_source_type()
+                logging.info(f"New {file_type} file detected: {file_path}")
+                logging.debug(f"Calling start_monitoring_file for {file_path}")
                 self.start_monitoring_file(file_path)
+                logging.debug(f"Returned from start_monitoring_file for {file_path}")
                 
         except Exception as e:
             logging.error(f"Error in on_created handler for {event.src_path}: {str(e)}")
@@ -388,14 +443,17 @@ class AudioFileHandler(FileSystemEventHandler):
             
             # Check if file has previously failed using state manager
             if not self.dry_run:
-                file_info = self.state_manager.get_file_info(file_path)
-                if file_info and file_info.get('status') == 'failed':
-                    attempt_count = self.failed_files.get(str_path, 0)
-                    if attempt_count >= self.max_retry_attempts:
-                        logging.warning(f"File {file_path} has exceeded maximum retry attempts. Moving to error directory.")
-                        self.move_to_error_dir(file_path)
-                        return
-                    logging.info(f"Retrying file {file_path} (attempt {attempt_count + 1}/{self.max_retry_attempts})")
+                try:
+                    file_info = self.state_manager.get_file_info(file_path)
+                    if file_info and file_info.get('status') == 'failed':
+                        attempt_count = self.failed_files.get(str_path, 0)
+                        if attempt_count >= self.max_retry_attempts:
+                            logging.warning(f"File {file_path} has exceeded maximum retry attempts. Moving to error directory.")
+                            self.move_to_error_dir(file_path)
+                            return
+                        logging.info(f"Retrying file {file_path} (attempt {attempt_count + 1}/{self.max_retry_attempts})")
+                except Exception as e:
+                    logging.warning(f"Error checking file info in state manager: {e}, continuing anyway")
             
             # Check in-memory failed files tracking
             if str_path in self.failed_files:
@@ -412,7 +470,11 @@ class AudioFileHandler(FileSystemEventHandler):
                 return
             
             # Check if already in processing queue
-            if not self.dry_run:
+            if not self.dry_run and hasattr(self, 'content_processor_manager'):
+                if not self.content_processor_manager.can_process(file_path):
+                    logging.warning(f"No processor available for file type: {file_path.suffix}")
+                    return
+                
                 queue_status = self.processing_queue.get_job_status(file_path)
                 if queue_status in [ProcessingStatus.PENDING, ProcessingStatus.PROCESSING]:
                     logging.info(f"File already in processing queue (status: {queue_status}), skipping monitoring: {file_path}")
@@ -426,9 +488,102 @@ class AudioFileHandler(FileSystemEventHandler):
                 'last_stable_time': current_time
             }
             logging.info(f"Started monitoring file: {file_path} (size: {file_size} bytes)")
+            logging.debug(f"File will be processed after {self.required_stable_time}s of stability")
         except Exception as e:
             logging.error(f"Error starting to monitor file {file_path}: {str(e)}")
             logging.exception("Full error trace:")
+    
+    def start_monitoring_folder(self, folder_path: Path):
+        """Start monitoring a folder for completion (no new files added for timeout period)."""
+        try:
+            current_time = time.time()
+            str_path = str(folder_path)
+            
+            logging.info(f"Starting to monitor folder: {folder_path}")
+            
+            # Check if folder exists
+            if not folder_path.exists() or not folder_path.is_dir():
+                logging.warning(f"Folder does not exist or is not a directory: {folder_path}")
+                return
+            
+            # Check if already being monitored
+            if str_path in self.folders_in_progress:
+                logging.debug(f"Folder already being monitored: {folder_path}")
+                return
+            
+            # Check if already processed
+            if not self.dry_run and self.state_manager.is_processed(folder_path):
+                logging.info(f"Folder already processed, skipping: {folder_path}")
+                return
+            
+            # Count files in folder
+            files = [f for f in folder_path.iterdir() if f.is_file() and not f.name.startswith('.')]
+            file_count = len(files)
+            
+            # Start monitoring the folder
+            self.folders_in_progress[str_path] = {
+                'first_seen_time': current_time,
+                'last_file_added': current_time,
+                'last_check_time': current_time,
+                'file_count': file_count,
+            }
+            logging.info(f"Started monitoring folder: {folder_path} ({file_count} file(s))")
+            logging.debug(f"Folder will be processed after {self.folder_completion_timeout}s with no new files")
+            
+        except Exception as e:
+            logging.error(f"Error starting to monitor folder {folder_path}: {str(e)}")
+            logging.exception("Full error trace:")
+    
+    def check_folders_in_progress(self):
+        """Check folders being monitored and process them when complete."""
+        current_time = time.time()
+        folders_to_remove = []
+        
+        for folder_path_str, folder_info in self.folders_in_progress.items():
+            try:
+                folder_path = Path(folder_path_str)
+                
+                if not folder_path.exists():
+                    logging.debug(f"Folder no longer exists, removing from monitoring: {folder_path}")
+                    folders_to_remove.append(folder_path_str)
+                    continue
+                
+                last_file_added = folder_info['last_file_added']
+                time_since_last_file = current_time - last_file_added
+                first_seen_time = folder_info['first_seen_time']
+                time_since_first_seen = current_time - first_seen_time
+                
+                # Count current files
+                current_files = [f for f in folder_path.iterdir() if f.is_file() and not f.name.startswith('.')]
+                current_file_count = len(current_files)
+                
+                # Update file count if it changed
+                if current_file_count != folder_info['file_count']:
+                    logging.debug(f"File count changed in folder {folder_path.name}: {folder_info['file_count']} -> {current_file_count}")
+                    folder_info['file_count'] = current_file_count
+                    folder_info['last_file_added'] = current_time
+                    folder_info['last_check_time'] = current_time
+                    continue  # Reset timer, continue monitoring
+                
+                # Check if folder is complete (no new files for timeout period)
+                if time_since_last_file >= self.folder_completion_timeout:
+                    # Folder is complete - process it
+                    logging.info(f"Folder {folder_path.name} is complete (no new files for {time_since_last_file:.1f}s, {current_file_count} file(s)), adding to processing queue...")
+                    self._add_to_processing_queue(folder_path)
+                    folders_to_remove.append(folder_path_str)
+                elif time_since_first_seen >= 300:  # Log progress every 5 minutes
+                    logging.debug(f"Folder still being monitored: {folder_path.name} (last file added {time_since_last_file:.1f}s ago, {current_file_count} file(s))")
+                
+                folder_info['last_check_time'] = current_time
+                
+            except Exception as e:
+                logging.error(f"Error checking folder {folder_path_str}: {str(e)}")
+                logging.exception("Full error trace:")
+                folders_to_remove.append(folder_path_str)
+        
+        # Remove processed or errored folders
+        for folder_path_str in folders_to_remove:
+            self.folders_in_progress.pop(folder_path_str, None)
     
     def _add_to_processing_queue(self, file_path: Path):
         """Add a file to the processing queue."""
@@ -437,6 +592,12 @@ class AudioFileHandler(FileSystemEventHandler):
             if not self.dry_run and self.state_manager.is_processed(file_path):
                 logging.info(f"File already processed, skipping: {file_path}")
                 return
+            
+            # Check if we can process this file type
+            if not self.dry_run and hasattr(self, 'content_processor_manager'):
+                if not self.content_processor_manager.can_process(file_path):
+                    logging.debug(f"No processor available for file type: {file_path.suffix}")
+                    return
             
             # Check if already in queue before attempting to add
             queue_status = self.processing_queue.get_job_status(file_path)
@@ -499,12 +660,12 @@ class AudioFileHandler(FileSystemEventHandler):
             return None, None
 
     def _process_audio_file(self, file_path):
-        """Process an audio file. Called by the processing queue."""
+        """Process a file (audio, text, etc.). Called by the processing queue."""
         start_time = time.time()
         str_path = str(file_path)
         file_hash = None
         note_path = None
-        audio_path = None
+        attachment_path = None
         transcription_language = None
         
         try:
@@ -513,11 +674,17 @@ class AudioFileHandler(FileSystemEventHandler):
             if self.dry_run:
                 logging.info(f"[DRY RUN] Would process: {file_path}")
                 if file_path.exists():
-                    logging.info(f"[DRY RUN] File size: {file_path.stat().st_size / 1024 / 1024:.2f} MB")
+                    file_size_mb = file_path.stat().st_size / 1024 / 1024
+                    logging.info(f"[DRY RUN] File size: {file_size_mb:.2f} MB")
                 return
             
-            # Mark as processing in state manager
-            file_hash = self.state_manager.mark_processing(file_path)
+            # Get the appropriate content processor
+            content_processor = self.content_processor_manager.get_processor(file_path)
+            if not content_processor:
+                raise ValueError(f"No processor available for file type: {file_path.suffix}")
+            
+            source_type = content_processor.get_source_type()
+            logging.info(f"Using {source_type} processor for {file_path}")
             
             # Check if file exists and is accessible (with retry for iCloud sync)
             max_checks = 3
@@ -533,34 +700,39 @@ class AudioFileHandler(FileSystemEventHandler):
                                                   attempt_count=self.failed_files.get(str_path, 0) + 1)
                     return
             
+            # Compute file hash BEFORE processing (file will be moved later)
+            file_hash = self.state_manager.get_file_hash(file_path)
+            
+            # Mark as processing in state manager
+            self.state_manager.mark_processing(file_path)
+            
             # Extract source date and time
             source_date, source_time = self._extract_source_datetime(file_path)
             
-            logging.info("Starting transcription...")
-            transcription_data = self.transcriber.transcribe(file_path)
-            logging.info("Transcription completed successfully")
+            # Extract content using the appropriate processor
+            logging.info(f"Extracting content from {source_type} file...")
+            extracted_content = content_processor.extract_content(file_path)
+            logging.info(f"Content extraction completed successfully")
             
             # Log metadata information
-            transcription_language = transcription_data.get("language")
+            transcription_language = extracted_content.get("language")
             if transcription_language:
                 logging.info(f"Detected language: {transcription_language}")
             
-            # Log confidence information
-            low_confidence_segments = [s for s in transcription_data.get("segments", []) 
-                                    if s.get("confidence", 0) < -1.0]
-            if low_confidence_segments:
-                logging.warning(f"Found {len(low_confidence_segments)} low confidence segments")
-            
-            # Unload Whisper model to free memory before Ollama processing
+            # Unload models to free memory before Ollama processing (for audio)
             # This enables sequential processing for better memory efficiency
-            # Only unload if sequential processing is enabled (default: True)
             sequential_mode = os.getenv('SEQUENTIAL_PROCESSING', 'true').lower() == 'true'
-            if sequential_mode:
-                logging.info("Unloading Whisper model to free memory for Ollama processing...")
-                self.transcriber.unload_model()
+            if sequential_mode and source_type == 'audio' and hasattr(content_processor, 'unload_model'):
+                logging.info("Unloading model to free memory for Ollama processing...")
+                content_processor.unload_model()
             
-            # Process with Ollama
-            processed_content = self.processor.process_transcription(transcription_data, file_path.name)
+            # Process with Ollama (pass file path for vision support)
+            processed_content = self.processor.process_content(
+                extracted_content, 
+                file_path.name,
+                source_type=source_type,
+                source_file_path=file_path
+            )
             
             # Add source date/time to processed content
             if source_date:
@@ -570,21 +742,22 @@ class AudioFileHandler(FileSystemEventHandler):
             
             logging.info("Ollama processing completed")
             
-            # Create note (this also moves the audio file)
+            # Create note (this also moves the source file)
             note_result = self.note_manager.create_note(processed_content, file_path)
             note_path = note_result.get('note_path')
-            audio_path = note_result.get('audio_path')
+            attachment_path = note_result.get('audio_path') or note_result.get('attachment_path')
             
             processing_time = time.time() - start_time
             logging.info(f"Note created successfully for: {file_path} (took {processing_time:.1f}s)")
             
-            # Mark as successful in state manager
+            # Mark as successful in state manager (use pre-computed hash since file was moved)
             self.state_manager.mark_success(
                 file_path, 
                 processing_time,
                 note_path=note_path,
-                audio_path=audio_path,
-                transcription_language=transcription_language
+                audio_path=attachment_path,  # Works for both audio and other attachments
+                transcription_language=transcription_language,
+                file_hash=file_hash  # Use hash computed before file was moved
             )
             
             # Remove from failed files if it was there
@@ -597,8 +770,8 @@ class AudioFileHandler(FileSystemEventHandler):
             error_type = type(e).__name__
             
             # Provide more user-friendly error messages
-            if "Transcription failed" in error_msg:
-                user_msg = f"Failed to transcribe audio file. This might be due to:\n  - Corrupted audio file\n  - Unsupported audio format\n  - Insufficient system resources\n  Original error: {error_msg}"
+            if "Transcription failed" in error_msg or "extract_content" in error_msg.lower():
+                user_msg = f"Failed to extract content from file. This might be due to:\n  - Corrupted file\n  - Unsupported file format\n  - Insufficient system resources\n  Original error: {error_msg}"
             elif "Ollama" in error_type or "connection" in error_msg.lower():
                 user_msg = f"Failed to connect to Ollama. Please ensure:\n  - Ollama is running (run 'ollama serve')\n  - The model '{os.getenv('OLLAMA_MODEL')}' is available (run 'ollama pull {os.getenv('OLLAMA_MODEL')}')\n  - Original error: {error_msg}"
             elif "YAML" in error_type or "YAML" in error_msg or "frontmatter" in error_msg.lower():
@@ -662,34 +835,60 @@ class AudioFileHandler(FileSystemEventHandler):
                 logging.error(f"Watch folder not found or not set: {watch_path}")
                 return False
 
-            # Get all files except those in the errors directory
+            # Get all files and folders except those in the errors directory
             # Skip iCloud placeholder files and empty files
-            all_files = []
-            for f in Path(watch_path).glob('*'):
-                if (f.parent != self.error_dir and f.is_file() 
-                    and f.suffix.lower() in ['.mp3', '.wav', '.m4a']
-                    and not f.name.endswith('.icloud')):
+            all_items = []
+            for item in Path(watch_path).iterdir():
+                # Skip the errors folder itself and anything inside it
+                if item == self.error_dir or self.error_dir in item.parents or item.parent == self.error_dir:
+                    continue
+                
+                # Check folders
+                if item.is_dir():
+                    if self.content_processor_manager.can_process(item):
+                        all_items.append(item)
+                    continue
+                
+                # Check files
+                if (item.is_file() 
+                    and self.content_processor_manager.can_process(item)
+                    and not item.name.endswith('.icloud')):
                     # Skip empty files (likely iCloud placeholders)
                     try:
-                        if f.exists() and f.stat().st_size > 0:
-                            all_files.append(f)
+                        if item.exists() and item.stat().st_size > 0:
+                            all_items.append(item)
                     except (OSError, PermissionError) as e:
-                        logging.debug(f"Could not check file {f}: {e}")
+                        logging.debug(f"Could not check file {item}: {e}")
                         continue
             
-            if all_files:
-                logging.info(f"Found {len(all_files)} audio files in watch directory")
-                for file_path in all_files:
-                    str_path = str(file_path)
+            if all_items:
+                logging.info(f"Found {len(all_items)} item(s) in watch directory")
+                for item_path in all_items:
+                    str_path = str(item_path)
                     # Check if already processed using state manager
-                    if not self.dry_run and self.state_manager.is_processed(file_path):
+                    if not self.dry_run and self.state_manager.is_processed(item_path):
                         continue
-                    # Check if already being monitored or queued
+                    
+                    # Handle folders
+                    if item_path.is_dir():
+                        if str_path not in self.folders_in_progress:
+                            if not self.dry_run and hasattr(self, 'content_processor_manager'):
+                                if self.content_processor_manager.can_process(item_path):
+                                    logging.info(f"Found new folder: {item_path.name}")
+                                    self.start_monitoring_folder(item_path)
+                        continue
+                    
+                    # Handle files
                     if str_path not in self.files_in_progress:
-                        queue_status = self.processing_queue.get_job_status(file_path)
+                        # Check if we can process this file type
+                        if not self.dry_run and hasattr(self, 'content_processor_manager'):
+                            if not self.content_processor_manager.can_process(item_path):
+                                continue
+                        
+                        queue_status = self.processing_queue.get_job_status(item_path)
                         if queue_status is None:  # Not in queue
-                            logging.info(f"Found new file: {file_path.name}")
-                            self.start_monitoring_file(file_path)
+                            logging.info(f"Found new file: {item_path.name}")
+                            self.start_monitoring_file(item_path)
                 return True
             return False
             
@@ -775,6 +974,9 @@ Examples:
     logging.info(f"OBSIDIAN_VAULT_PATH = {os.getenv('OBSIDIAN_VAULT_PATH')}")
     logging.info(f"NOTES_FOLDER = {os.getenv('NOTES_FOLDER', 'notes')}")
     logging.info(f"OLLAMA_MODEL = {os.getenv('OLLAMA_MODEL')}")
+    vision_model = os.getenv('OLLAMA_VISION_MODEL')
+    if vision_model:
+        logging.info(f"OLLAMA_VISION_MODEL = {vision_model}")
     logging.info(f"WHISPER_MODEL_SIZE = {os.getenv('WHISPER_MODEL_SIZE', 'medium')}")
     
     if args.dry_run:
@@ -830,6 +1032,10 @@ Examples:
                 # This ensures files are processed as soon as they're stable
                 if event_handler.files_in_progress:
                     event_handler.check_files_in_progress()
+                
+                # Check folders in progress every second (for completion checking)
+                if event_handler.folders_in_progress:
+                    event_handler.check_folders_in_progress()
                 
                 if current_time - last_check >= check_interval:
                     # Force a health check and directory scan

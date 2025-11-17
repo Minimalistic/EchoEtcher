@@ -16,5 +16,15 @@ python-dotenv>=1.0.0
 pydantic>=2.5.0
 pyyaml>=6.0.0
 
+# Optional: Image processing (for OCR)
+# Install with: pip install Pillow pytesseract pillow-heif
+# Also requires Tesseract OCR to be installed on your system:
+#   macOS: brew install tesseract
+#   Linux: sudo apt install tesseract-ocr (or equivalent)
+#   Windows: Download from https://github.com/UB-Mannheim/tesseract/wiki
+Pillow>=10.0.0
+pytesseract>=0.3.10
+pillow-heif>=0.13.0
+
 # Note: Ollama is a separate service, not a Python package
 # Install it from https://ollama.ai/ and run 'ollama serve' separately

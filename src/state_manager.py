@@ -76,14 +76,19 @@ class StateManager:
     
     def get_file_hash(self, file_path: Path) -> str:
         """
-        Generate SHA256 hash of file content.
+        Generate SHA256 hash of file content or directory path.
         
         Args:
-            file_path: Path to the file
+            file_path: Path to the file or directory
             
         Returns:
             SHA256 hash as hexadecimal string
         """
+        # For directories, use path-based hash
+        if file_path.is_dir():
+            return hashlib.sha256(str(file_path).encode()).hexdigest()
+        
+        # For files, hash the content
         sha256 = hashlib.sha256()
         try:
             with open(file_path, 'rb') as f:
@@ -196,19 +201,23 @@ class StateManager:
     def mark_success(self, file_path: Path, processing_duration: float, 
                      note_path: Optional[Path] = None, 
                      audio_path: Optional[Path] = None,
-                     transcription_language: Optional[str] = None):
+                     transcription_language: Optional[str] = None,
+                     file_hash: Optional[str] = None):
         """
         Mark a file as successfully processed.
         
         Args:
-            file_path: Path to the original file
+            file_path: Path to the original file (may not exist if already moved)
             processing_duration: Time taken to process in seconds
             note_path: Path to the created note file
             audio_path: Path to the moved audio file
             transcription_language: Detected language from transcription
+            file_hash: Optional pre-computed file hash (recommended if file has been moved)
         """
         try:
-            file_hash = self.get_file_hash(file_path)
+            # Use provided hash or compute it (file may have been moved)
+            if file_hash is None:
+                file_hash = self.get_file_hash(file_path)
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
