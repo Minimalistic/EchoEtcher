@@ -1,0 +1,1502 @@
+This file is a merged representation of a subset of the codebase, containing files not matching ignore patterns, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of a subset of the repository's contents that is considered the most important context.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching these patterns are excluded: modules/**, web/node_modules/**, Module_Template/platform_context.xml
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+.agent/
+  rules/
+    protect-core-platform-by-using-platform-backlog.md
+core/
+  __init__.py
+  agent_base.py
+  database.py
+  event_bus.py
+  llm.py
+  loader.py
+  module_standard.py
+  resources.py
+  scheduler.py
+  scraper.py
+Module_Template/
+  MODULE_CREATION_PROMPT.md
+tests/
+  test_module_loading.py
+  test_price_monitor.py
+web/
+  static/
+    style.css
+  templates/
+    index.html
+  __init__.py
+  api.py
+  ui.py
+.cursorrules
+.gitignore
+generate_platform_context.sh
+main.py
+PLATFORM_BACKLOG.md
+README.md
+requirements.txt
+run.sh
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path=".agent/rules/protect-core-platform-by-using-platform-backlog.md">
+---
+trigger: always_on
+description: When any core platform files or folders are deemed to be needing to be modified, either for general improvements, bug fixes or upgrades/feature additions
+---
+
+LLM should instead of editing any core platform files or folders, should instead review and update the PLATFORM_BACKLOG.md file stored in the root of the project. Then if there's anything new they're wanting to change, alert the user and ask if it can be done / suggest a good time to do it.
+</file>
+
+<file path="Module_Template/MODULE_CREATION_PROMPT.md">
+# AI Programmer Prompt: Create a New Jagents Module
+
+**Instructions to Developer**: Copy and paste the text below into your AI coding assistant (e.g., Cursor, GitHub Copilot, ChatGPT) to instruct it how to build a new module for the Jagents platform. Fill in the `[SPECIFIC_REQUIREMENTS]` section with your unique needs.
+
+---
+
+**Role**: You are an expert Python developer working on the "Jagents" platform. Jagents is a modular, local-first AI agent platform built with Python, FastAPI, SQLite, and Ollama.
+
+**Objective**: Create a new, self-contained module for the platform.
+
+**Context**: You have been provided with `platform_context.xml` (or similar context file) which contains the core source code of the Jagents platform. Use this to understand the base classes (`BaseAgent`, `BaseModule`), database session management, and available utilities.
+
+## Design Ethos & Philosophy
+1.  **Local-First & Private**: All data should remain local. Avoid external API calls unless the module's primary purpose is fetching data (e.g., RSS, Price Monitoring).
+2.  **Modular & Self-Contained**: Your module should be a folder in `modules/` that contains *everything* it needs (agent, router, UI, models). It should not pollute the core code.
+3.  **Aesthetics Matter**: "Jagents" aims for a premium, modern user experience. UI components should look polished, using the platform's glassmorphism style, smooth transitions, and consistent color palette.
+4.  **Simplicity**: Prefer simple, readable code. Avoid over-engineering. Use the platform's existing tools (memory, scheduler) before building your own.
+
+## Platform Architecture Overview
+
+1.  **Modules**: Live in `modules/`. Each is a directory (e.g., `modules/rss_aggregator/`).
+2.  **Core Components** (Do not modify these, but import from them):
+    *   `core.module_standard.BaseModule`: The entry point class.
+    *   `core.agent_base.BaseAgent`: The base class for background workers.
+    *   `core.module_standard.UIComponent`: Defines widgets for the dashboard.
+    *   `core.database.SessionLocal`: For database access (SQLAlchemy async).
+
+## Task: Create Module `[MODULE_NAME]`
+
+Please create the following file structure in `modules/[module_snake_case_name]/`:
+
+### 1. `agent.py`
+Create a class inheriting from `BaseAgent`.
+*   **Implement `run()`**: This is the main logic loop.
+*   **Implement `schedule()`**: Define how often `run()` executes (e.g., `self.scheduler.add_job(self.run, 'interval', minutes=5)`).
+*   **Logging**: Use `await self.log("message")`.
+*   **Memory**: Use `await self.save_memory("key", value)` and `await self.get_memory("key")` for simple persistence.
+*   **LLM Access**: Use `self.llm.chat(...)` if AI features are needed.
+
+### 2. `router.py` (Optional)
+If the module needs API endpoints:
+*   Create a `APIRouter` instance.
+*   Define endpoints (GET/POST).
+
+### 3. `module.py`
+Create a class inheriting from `BaseModule`.
+*   **`__init__`**:
+    *   Call `super().__init__("ModuleName")`.
+    *   Initialize the agent: `self.agent = MyAgent("agent_name")`.
+    *   Register components:
+        *   `self.register_agent(self.agent)`
+        *   `self.register_router(api_router)` (if applicable)
+        *   `self.register_ui(...)`
+
+### 4. `models.py` (Optional)
+If you need custom SQL tables (more than just the simple Key-Value memory):
+*   Import `Base` from `core.database`.
+*   Define your classes: `class MyModel(Base): ...`
+*   **Important**: In `module.py`, inside `on_startup`, you must ensure these tables are created:
+    ```python
+    from core.database import engine, Base
+    from .models import MyTable # Import to register metadata
+
+    async def on_startup(self, app_state):
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    ```
+
+### 5. `__init__.py`
+*   Expose the module class: `from .module import MyModule`.
+
+## UI & Styling Guidelines (Crucial)
+The platform uses a dark, glassmorphism-themed design. Your `UIComponent` `html_content` should adhere to these standards:
+
+*   **CSS Variables**: Use these for consistency (do not hardcode hex values where possible):
+    *   `--bg-color`, `--text-color` (Main background/text)
+    *   `--primary-color`, `--accent-color` (Gradients/Highlights)
+    *   `--glass-border` (Subtle 1px border)
+*   **Layout**:
+    *   The platform wraps your widget in a `.card` container automatically.
+    *   Use flexbox or grid for internal layout.
+*   **Components**:
+    *   **Buttons**: Add class `btn` for the standard gradient button.
+    *   **Status Indicators**: Use `span` with class `status-badge`. Add `status-running` (green) or `status-stopped` (red).
+*   **Visuals**:
+    *   Ensure text contrasts well (it's a dark theme).
+    *   Avoid white backgrounds; use transparent or dark slate colors.
+
+## Best Practices
+1.  **Async/Await**: The core is built on asyncio. Ensure your `run()` loop and any I/O are non-blocking.
+2.  **Error Handling**: Your module should be robust. Catch exceptions in `run()` to prevent crashing the main loop. Log errors using `self.log()`.
+3.  **Type Hinting**: Use Python type hints heavily for better AI understanding and code safety.
+4.  **Dependencies**: If you need external packages (e.g., `feedparser`), list them clearly.
+
+## specific Module Requirements
+[PASTE YOUR SPECIFIC REQUIREMENTS HERE]
+*   **Goal**: [Describe what this module should do]
+*   **Inputs**: [What data does it need?]
+*   **Outputs**: [What does it produce/display?]
+*   **Frequency**: [How often should it run?]
+</file>
+
+<file path="generate_platform_context.sh">
+#!/bin/bash
+
+# Generate platform_context.xml using repomix
+# Excludes the modules directory to keep the context focused on the core platform
+# Usage: ./generate_platform_context.sh
+
+echo "Generating platform_context.xml..."
+npx repomix --ignore "modules/**,web/node_modules/**,Module_Template/platform_context.xml" --output Module_Template/platform_context.xml
+
+echo "Done! platform_context.xml has been updated."
+</file>
+
+<file path="core/__init__.py">
+
+</file>
+
+<file path="core/agent_base.py">
+from abc import ABC, abstractmethod
+from typing import Dict, Any, Optional
+import logging
+from sqlalchemy.ext.asyncio import AsyncSession
+from .database import SessionLocal, AgentState
+from .llm import OllamaClient
+from .scheduler import SchedulerService
+from .event_bus import EventBus
+from .scraper import ScraperService
+from sqlalchemy import select
+
+class BaseAgent(ABC):
+    def __init__(self, name: str):
+        self.name = name
+        self.logger = logging.getLogger(f"jagents.modules.{name}")
+        self.llm = OllamaClient()
+        self.scraper = ScraperService
+        self.scheduler = SchedulerService.get_instance()
+        self.event_bus = EventBus
+
+    @abstractmethod
+    async def run(self, *args, **kwargs):
+        """
+        The main logic of the agent. This is what gets executed by the scheduler or manually.
+        """
+        pass
+
+    def schedule(self):
+        """
+        Override this to set up default schedules when the agent loads.
+        Example: self.scheduler.add_job(self.run, 'interval', minutes=60)
+        """
+        pass
+
+    async def get_state(self, db: AsyncSession) -> Optional[AgentState]:
+        result = await db.execute(select(AgentState).where(AgentState.name == self.name))
+        return result.scalar_one_or_none()
+    
+    async def save_memory(self, key: str, value: Any):
+        """
+        Helper to save data to the agent's persistent memory in DB.
+        """
+        async with SessionLocal() as db:
+            state = await self.get_state(db)
+            if not state:
+                # Create initial state if not exists
+                state = AgentState(name=self.name, status="running", memory={})
+                db.add(state)
+            
+            # Update memory
+            # Note: For SQLite JSON updates, we often need to replace the whole dict or ensure mutation tracking
+            current_mem = dict(state.memory) if state.memory else {}
+            current_mem[key] = value
+            state.memory = current_mem
+            await db.commit()
+
+    async def get_memory(self, key: str, default: Any = None) -> Any:
+        async with SessionLocal() as db:
+            state = await self.get_state(db)
+            if state and state.memory:
+                return state.memory.get(key, default)
+            return default
+
+    async def log(self, message: str, level: str = "INFO"):
+        self.logger.log(getattr(logging, level.upper()), message)
+        # We could also write to DB log table here if desired
+</file>
+
+<file path="core/database.py">
+import os
+import datetime
+from typing import AsyncGenerator
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy import String, Text, DateTime, JSON
+
+DATABASE_URL = "sqlite+aiosqlite:///jagaments.db"
+
+# Create async engine with WAL mode optimized settings
+engine = create_async_engine(
+    DATABASE_URL,
+    connect_args={"check_same_thread": False},  # Needed for SQLite
+    echo=False
+)
+
+# Enable WAL mode on connect
+from sqlalchemy import event
+@event.listens_for(engine.sync_engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.close()
+
+SessionLocal = async_sessionmaker(autocommit=False, autoflush=False, bind=engine, class_=AsyncSession)
+
+class Base(DeclarativeBase):
+    pass
+
+class AgentState(Base):
+    __tablename__ = "agent_states"
+
+    name: Mapped[str] = mapped_column(String, primary_key=True)
+    status: Mapped[str] = mapped_column(String, default="stopped") # stopped, running, error
+    last_run: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=True)
+    next_run: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=True)
+    config: Mapped[dict] = mapped_column(JSON, default={})
+    memory: Mapped[dict] = mapped_column(JSON, default={}) # Persistent memory for the agent
+
+class LogEntry(Base):
+    __tablename__ = "logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    timestamp: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow)
+    agent_name: Mapped[str] = mapped_column(String, index=True)
+    level: Mapped[str] = mapped_column(String)
+    message: Mapped[str] = mapped_column(Text)
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    timestamp: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow)
+    title: Mapped[str] = mapped_column(String)
+    message: Mapped[str] = mapped_column(Text)
+    read: Mapped[bool] = mapped_column(default=False)
+    agent_name: Mapped[str] = mapped_column(String, nullable=True)
+
+async def init_db():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    async with SessionLocal() as session:
+        yield session
+</file>
+
+<file path="core/event_bus.py">
+import asyncio
+from typing import Callable, Dict, List, Any
+import logging
+
+logger = logging.getLogger("jagents.event_bus")
+
+class EventBus:
+    _subscribers: Dict[str, List[Callable[[Any],  Any]]] = {}
+
+    @classmethod
+    def subscribe(cls, event_type: str, callback: Callable[[Any], Any]):
+        if event_type not in cls._subscribers:
+            cls._subscribers[event_type] = []
+        cls._subscribers[event_type].append(callback)
+        logger.info(f"Subscribed to {event_type}")
+
+    @classmethod
+    async def publish(cls, event_type: str, data: Any = None):
+        if event_type in cls._subscribers:
+            for callback in cls._subscribers[event_type]:
+                try:
+                    if asyncio.iscoroutinefunction(callback):
+                        await callback(data)
+                    else:
+                        callback(data)
+                except Exception as e:
+                    logger.error(f"Error handling event {event_type}: {e}")
+</file>
+
+<file path="core/llm.py">
+import ollama
+from .resources import get_llm_permit, release_llm_permit
+import logging
+import json
+from typing import Optional, Dict, Any
+
+logger = logging.getLogger("jagents.llm")
+
+class OllamaClient:
+    def __init__(self, model_name: str = "llama3"):
+        self.default_model = model_name
+
+    async def generate_text(self, prompt: str, model: Optional[str] = None, system: Optional[str] = None, json_mode: bool = False) -> str:
+        """
+        Generates text using Ollama, respecting the concurrency limit.
+        """
+        target_model = model or self.default_model
+        permit = await get_llm_permit()
+        try:
+            logger.info(f"Generating with {target_model}...")
+            options = {}
+            format = None
+            if json_mode:
+                format = "json"
+
+            import asyncio
+            # Prepare messages if system prompt is provided, else standard generate
+            if system:
+                messages = [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": prompt}
+                ]
+                response = await asyncio.to_thread(ollama.chat, model=target_model, messages=messages, format=format)
+                return response['message']['content']
+            else:
+                response = await asyncio.to_thread(ollama.generate, model=target_model, prompt=prompt, format=format)
+                return response['response']
+
+        except Exception as e:
+            logger.error(f"LLM Generation failed: {e}")
+            raise
+        finally:
+            release_llm_permit()
+
+    async def generate_json(self, prompt: str, model: Optional[str] = None, system: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Helper to generate and parse JSON.
+        """
+        response_text = await self.generate_text(prompt, model=model, system=system, json_mode=True)
+        try:
+            return json.loads(response_text)
+        except json.JSONDecodeError:
+            logger.error(f"Failed to parse JSON response: {response_text}")
+            raise ValueError("LLM did not return valid JSON")
+</file>
+
+<file path="core/module_standard.py">
+from abc import ABC
+from typing import List, Optional, Any, Dict
+from fastapi import APIRouter
+from pydantic import BaseModel
+
+from .agent_base import BaseAgent
+
+class UIComponent(BaseModel):
+    """
+    Defines a UI component that should be rendered in the frontend dashboard.
+    """
+    id: str
+    title: str
+    # 'type' determines how the frontend renders it.
+    # 'widget' = A small card/box in the dashboard grid.
+    # 'full_page' = A link to a dedicated page.
+    type: str = "widget" 
+    
+    # 'html_template' could be a raw HTML string or a path to a template.
+    # For simplicity, let's allow raw HTML injection for widgets.
+    # IN A REAL APP: Use path to templates or React components.
+    html_content: Optional[str] = None
+    
+    # Scripts to inject into the page to make the component interactive
+    script_content: Optional[str] = None
+
+class BaseModule(ABC):
+    """
+    The standard contract for all Jagents functional units.
+    A Module bundles Agents, API endpoints, and UI components.
+    """
+    def __init__(self, name: str):
+        self.name = name
+        self.agents: List[BaseAgent] = []
+        self.router: Optional[APIRouter] = None
+        self.ui_components: List[UIComponent] = []
+
+    def register_agent(self, agent: BaseAgent):
+        """
+        Register an agent to be managed by the platform.
+        """
+        self.agents.append(agent)
+
+    def register_router(self, router: APIRouter):
+        """
+        Register a FastAPI router to be mounted by the main app.
+        """
+        self.router = router
+
+    def register_ui(self, component: UIComponent):
+        """
+        Register a UI component to be displayed on the dashboard.
+        """
+        self.ui_components.append(component)
+
+    async def on_startup(self, app_state: Dict[str, Any]):
+        """
+        Optional hook called when the platform starts.
+        """
+        pass
+
+    async def on_shutdown(self):
+        """
+        Optional hook called when the platform stops.
+        """
+        pass
+</file>
+
+<file path="core/resources.py">
+import asyncio
+from typing import Optional
+
+class ResourceManager:
+    _instance = None
+    
+    def __init__(self):
+        # Limit concurrent LLM calls to 1 by default (for local LLMs like 8b/13b)
+        self.llm_semaphore = asyncio.Semaphore(1)
+        # Global lock for critical file I/O if needed
+        self.io_lock = asyncio.Lock()
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+async def get_llm_permit():
+    manager = ResourceManager.get_instance()
+    await manager.llm_semaphore.acquire()
+    return manager
+
+def release_llm_permit():
+    manager = ResourceManager.get_instance()
+    manager.llm_semaphore.release()
+</file>
+
+<file path="core/scheduler.py">
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.date import DateTrigger
+import logging
+
+logger = logging.getLogger("jagents.scheduler")
+
+class SchedulerService:
+    _instance = None
+    
+    def __init__(self):
+        self.scheduler = AsyncIOScheduler()
+        self.scheduler.start()
+        logger.info("Scheduler started")
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def add_job(self, func, trigger_type="interval", **trigger_args):
+        """
+        Add a job to the scheduler.
+        trigger_type: 'interval', 'cron', or 'date'
+        trigger_args: arguments for the trigger (e.g., seconds=60, hour=12)
+        """
+        try:
+            if trigger_type == "interval":
+                trigger = IntervalTrigger(**trigger_args)
+            elif trigger_type == "cron":
+                trigger = CronTrigger(**trigger_args)
+            elif trigger_type == "date":
+                trigger = DateTrigger(**trigger_args)
+            else:
+                raise ValueError(f"Unknown trigger type: {trigger_type}")
+
+            job = self.scheduler.add_job(func, trigger)
+            logger.info(f"Added job {func.__name__} with trigger {trigger}")
+            return job
+        except Exception as e:
+            logger.error(f"Failed to add job {func.__name__}: {e}")
+            raise
+</file>
+
+<file path="core/scraper.py">
+import httpx
+from bs4 import BeautifulSoup
+import logging
+import asyncio
+from typing import Optional, Dict
+
+logger = logging.getLogger("jagents.scraper")
+
+class ScraperService:
+    @staticmethod
+    async def fetch_page(url: str, params: Optional[Dict] = None, headers: Optional[Dict] = None, retries: int = 3) -> Optional[str]:
+        """
+        Fetches a page content asynchronously.
+        """
+        default_headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36"
+        }
+        if headers:
+            default_headers.update(headers)
+
+        async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+            for attempt in range(retries):
+                try:
+                    response = await client.get(url, params=params, headers=default_headers)
+                    response.raise_for_status()
+                    return response.text
+                except httpx.HTTPError as e:
+                    logger.warning(f"Attempt {attempt + 1}/{retries} failed for {url}: {e}")
+                    if attempt == retries - 1:
+                        logger.error(f"Failed to fetch {url} after {retries} attempts")
+                        return None
+                    await asyncio.sleep(2 ** attempt) # Exponential backoff
+        return None
+
+    @staticmethod
+    async def parse_html(html: str) -> BeautifulSoup:
+        """
+        Parses HTML using BeautifulSoup in a separate thread to avoid blocking.
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, BeautifulSoup, html, "html.parser")
+
+    @staticmethod
+    async def scrape_text(url: str) -> Optional[str]:
+        """
+        Convenience method to fetch and extract all text from a URL.
+        """
+        html = await ScraperService.fetch_page(url)
+        if html:
+            soup = await ScraperService.parse_html(html)
+            # Remove scripts and styles
+            for script in soup(["script", "style"]):
+                script.decompose()
+            return soup.get_text(separator="\n", strip=True)
+        return None
+</file>
+
+<file path="tests/test_module_loading.py">
+from core.loader import ModuleLoader
+from core.module_standard import BaseModule
+
+import asyncio
+
+async def test_module_loading():
+    loader = ModuleLoader()
+    modules = loader.load_modules()
+    
+    assert len(modules) > 0
+    
+    # Check for Price Monitor
+    pm_module = next((m for m in modules if m.name == "PriceMonitor"), None)
+    assert pm_module is not None
+    assert isinstance(pm_module, BaseModule)
+    
+    # Check components
+    assert len(pm_module.agents) > 0
+    assert pm_module.agents[0].name == "price_monitor"
+    
+    assert pm_module.router is not None
+    assert pm_module.router.prefix == "/price_monitor"
+    
+    assert len(pm_module.ui_components) > 0
+    widget = pm_module.ui_components[0]
+    assert widget.id == "price_monitor_widget"
+    assert "Price Monitor" in widget.title
+
+    print("\nModule loading verification passed!")
+
+if __name__ == "__main__":
+    asyncio.run(test_module_loading())
+</file>
+
+<file path="web/static/style.css">
+:root {
+    --bg-color: #0f172a;
+    --text-color: #e2e8f0;
+    --card-bg: rgba(30, 41, 59, 0.7);
+    --primary-color: #3b82f6;
+    --accent-color: #8b5cf6;
+    --glass-border: 1px solid rgba(255, 255, 255, 0.1);
+    --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+body {
+    font-family: 'Inter', sans-serif;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    margin: 0;
+    padding: 0;
+    background-image: 
+        radial-gradient(circle at 10% 20%, rgba(59, 130, 246, 0.1) 0%, transparent 20%),
+        radial-gradient(circle at 90% 80%, rgba(139, 92, 246, 0.1) 0%, transparent 20%);
+    min-height: 100vh;
+}
+
+header {
+    backdrop-filter: blur(10px);
+    background: rgba(15, 23, 42, 0.8);
+    position: sticky;
+    top: 0;
+    border-bottom: var(--glass-border);
+    padding: 1rem 2rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    z-index: 10;
+}
+
+h1 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    background: linear-gradient(to right, var(--primary-color), var(--accent-color));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin: 0;
+}
+
+main {
+    padding: 2rem;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1.5rem;
+}
+
+.card {
+    background: var(--card-bg);
+    border: var(--glass-border);
+    backdrop-filter: blur(12px);
+    border-radius: 1rem;
+    padding: 1.5rem;
+    box-shadow: var(--shadow);
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+}
+
+.card h2 {
+    margin-top: 0;
+    font-size: 1.25rem;
+    color: #fff;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.status-badge {
+    font-size: 0.75rem;
+    padding: 0.25rem 0.75rem;
+    border-radius: 9999px;
+    background: rgba(255, 255, 255, 0.1);
+    color: #cbd5e1;
+}
+
+.status-running {
+    background: rgba(16, 185, 129, 0.2);
+    color: #34d399;
+    border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.status-stopped {
+    background: rgba(239, 68, 68, 0.2);
+    color: #fca5a5;
+    border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+.btn {
+    background: linear-gradient(135deg, var(--primary-color), var(--accent-color));
+    border: none;
+    color: white;
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+    cursor: pointer;
+    font-weight: 500;
+    transition: opacity 0.2s;
+}
+
+.btn:hover {
+    opacity: 0.9;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 1rem;
+}
+
+th, td {
+    text-align: left;
+    padding: 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+th {
+    color: #94a3b8;
+    font-weight: 500;
+    font-size: 0.875rem;
+}
+
+td {
+    color: #e2e8f0;
+    font-size: 0.875rem;
+}
+</file>
+
+<file path="web/__init__.py">
+
+</file>
+
+<file path="web/ui.py">
+from fastapi import APIRouter, Request, Depends
+from fastapi.templating import Jinja2Templates
+from core.database import get_db
+from sqlalchemy.orm import Session
+
+router = APIRouter(tags=["ui"])
+templates = Jinja2Templates(directory="web/templates")
+
+@router.get("/")
+async def dashboard(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+</file>
+
+<file path="PLATFORM_BACKLOG.md">
+# Platform Infrastructure Backlog
+
+## Instructions for AI Agents
+If you discover a required change to the "Frozen Platform Infrastructure" (`core/`, `web/`, `main.py`):
+1.  **DO NOT** modify the code directly.
+2.  **Add** the item to the "Backlog" section below.
+3.  **Reprioritize** the list (Most critical first).
+4.  **Update** the "Maintenance Prompt" section with a comprehensive prompt that the user can run to execute these changes.
+
+---
+
+## Backlog (Prioritized)
+
+- [ ] **[Example]** Add authentication middleware to `main.py` (Security risk).
+- [ ] **[Example]** Update `core/loader.py` to support hot-reloading of modules.
+
+---
+
+## Maintenance Prompt
+> **Copy and paste this prompt to an AI agent to execute the platform upgrades:**
+
+```markdown
+I need you to perform a "Platform Upgrade" on the Jagents infrastructure.
+Please implementing the following prioritized tasks:
+
+1. [High Priority] ...
+2. ...
+
+Ensure all changes respect the `BaseModule` contracts and do not break existing modules.
+```
+</file>
+
+<file path="README.md">
+# Jagents Platform
+
+Jagents is a robust, modular Python platform for running local autonomous agents powered by Ollama.
+
+## Features
+- **Local First**: Powered by local LLMs (Ollama) and SQLite.
+- **Modular**: Agents are self-contained in the `modules/` directory.
+- **Resilient**: Built-in retries, rate limiting, and database WAL mode.
+- **Dashboard**: Modern dashboard to view agent status and logs.
+
+## Installation
+
+1.  **Prerequisites**:
+    - Python 3.9+
+    - [Ollama](https://ollama.com/) installed and running (default model: `llama3`).
+
+2.  **Setup Virtual Environment & Install Dependencies**:
+    ```bash
+    # Create virtual environment
+    python3 -m venv venv
+    
+    # Activate virtual environment
+    source venv/bin/activate  # On macOS/Linux
+    # .\venv\Scripts\activate # On Windows
+    
+    # Install dependencies
+    pip install -r requirements.txt
+    ```
+
+## Usage
+
+1.  **Start the Platform**:
+    ```bash
+    # Ensure venv is active
+    source venv/bin/activate
+    python main.py
+    ```
+2.  **Open Dashboard**:
+    Visit [http://localhost:8000](http://localhost:8000)
+
+## Creating Agents
+Create a new file in `modules/` (e.g., `modules/my_agent.py`):
+```python
+from core.agent_base import BaseAgent
+
+class MyAgent(BaseAgent):
+    async def run(self):
+        await self.log("Hello from MyAgent!")
+        
+    def schedule(self):
+        self.scheduler.add_job(self.run, 'interval', minutes=10)
+```
+The platform will automatically load and schedule it.
+</file>
+
+<file path="requirements.txt">
+fastapi
+uvicorn
+sqlalchemy
+aiosqlite
+greenlet
+ollama
+apscheduler
+httpx
+beautifulsoup4
+pydantic
+pydantic-settings
+jinja2
+python-multipart
+websockets
+feedparser
+trafilatura
+lxml_html_clean
+</file>
+
+<file path="run.sh">
+#!/bin/bash
+# Check if venv exists
+if [ ! -d "venv" ]; then
+    echo "Creating virtual environment..."
+    python3 -m venv venv
+fi
+# Ensure dependencies are up to date
+./venv/bin/pip install -r requirements.txt --quiet
+
+
+# Activate and run
+source venv/bin/activate
+exec python3 main.py
+</file>
+
+<file path="core/loader.py">
+import importlib
+import pkgutil
+import inspect
+import logging
+import os
+import sys
+from typing import List, Type
+from .agent_base import BaseAgent
+
+logger = logging.getLogger("jagents.loader")
+
+class ModuleLoader:
+    def __init__(self, modules_dir: str = "modules"):
+        self.modules_dir = modules_dir
+        # Ensure modules dir is in sys.path
+        if os.path.abspath(modules_dir) not in sys.path:
+            sys.path.append(os.path.abspath(modules_dir))
+
+    def load_modules(self) -> List:
+        """
+        Dynamically load all modules (BaseModule) from the modules directory.
+        """
+        from core.module_standard import BaseModule
+        loaded_modules = []
+        
+        try:
+            import modules
+            package_path = os.path.dirname(modules.__file__)
+            
+            for _, name, _ in pkgutil.iter_modules([package_path]):
+                try:
+                    full_module_name = f"modules.{name}"
+                    module = importlib.import_module(full_module_name)
+                    
+                    # Scan for BaseModule subclasses
+                    for attribute_name in dir(module):
+                        attribute = getattr(module, attribute_name)
+                        
+                        if (isinstance(attribute, type) and 
+                            issubclass(attribute, BaseModule) and 
+                            attribute is not BaseModule):
+                            
+                            try:
+                                # Instantiate module
+                                module_instance = attribute()
+                                logger.info(f"Loaded module: {attribute.__name__} from {name}")
+                                loaded_modules.append(module_instance)
+                            except Exception as e:
+                                logger.error(f"Failed to instantiate module {attribute.__name__}: {e}")
+
+                except Exception as e:
+                    logger.error(f"Failed to load module {name}: {e}")
+
+        except ImportError as e:
+            logger.error(f"Could not import modules package: {e}")
+        except Exception as e:
+             logger.error(f"Unexpected error exploring modules: {e}")
+
+        return loaded_modules
+
+    def load_agents(self) -> List[BaseAgent]:
+        """
+        Legacy/Convenience: Load all agents from all modules.
+        """
+        modules = self.load_modules()
+        all_agents = []
+        for mod in modules:
+            all_agents.extend(mod.agents)
+        return all_agents
+
+        return loaded_agents
+</file>
+
+<file path="tests/test_price_monitor.py">
+import asyncio
+from unittest.mock import MagicMock, AsyncMock, patch
+from modules.price_monitor import PriceMonitorAgent
+
+async def test_price_monitor_flow():
+    # 1. Setup Mock Agent
+    agent = PriceMonitorAgent("test_monitor")
+    
+    # Mock internal services
+    agent.scraper.scrape_text = AsyncMock(return_value="<html>Product A Price: $99.99</html>")
+    agent.llm.generate_text = AsyncMock(side_effect=lambda prompt, **kwargs: "99.99" if "current price" in prompt.lower() else "Product A")
+    agent.event_bus.publish = AsyncMock()
+    
+    # Mock memory interactions (since we don't want real DB)
+    memory_store = {}
+    
+    async def mock_get_memory(key, default=None):
+        return memory_store.get(key, default)
+    
+    async def mock_save_memory(key, value):
+        memory_store[key] = value
+
+    agent.get_memory = AsyncMock(side_effect=mock_get_memory)
+    agent.save_memory = AsyncMock(side_effect=mock_save_memory)
+    agent.log = AsyncMock()
+
+    # 2. Add Product
+    await agent.add_product("http://test.com/a", 150.0)
+    
+    products = memory_store["products"]
+    assert len(products) == 1
+    assert products[0]["url"] == "http://test.com/a"
+    assert products[0]["target_price"] == 150.0
+
+    # 3. Run Agent (Scrape & Check)
+    await agent.run()
+
+    # 4. Verify Results
+    updated_products = memory_store["products"]
+    product = updated_products[0]
+    
+    # Check history
+    assert len(product["history"]) == 1
+    assert product["history"][0]["price"] == 99.99
+    
+    # Check name extraction
+    assert product["name"] == "Product A"
+
+    # Check alert was sent (99.99 < 150.00)
+    agent.event_bus.publish.assert_called_once()
+    call_args = agent.event_bus.publish.call_args
+    assert call_args[0][0] == "notification"
+    assert "Price Drop Alert" in call_args[0][1]["title"]
+    assert "99.99" in call_args[0][1]["message"]
+
+    print("\nTest passed successfully!")
+
+if __name__ == "__main__":
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(test_price_monitor_flow())
+</file>
+
+<file path="web/templates/index.html">
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jagents Platform</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <header>
+        <div style="display: flex; align-items: center; gap: 1rem;">
+            <h1>Jagents</h1>
+            <span
+                style="font-size: 0.8rem; color: #94a3b8; background: rgba(255,255,255,0.05); padding: 2px 8px; border-radius: 4px;">Local
+                Autonomous Agents</span>
+        </div>
+        <button class="btn" onclick="refreshData()">Refresh</button>
+    </header>
+
+    <main>
+        <section style="margin-bottom: 3rem;">
+            <h2 style="margin-bottom: 1.5rem; font-size: 1.5rem;">Active Agents</h2>
+            <div id="agents-grid" class="grid">
+                <!-- Agents injected here -->
+                <div class="card">Loading...</div>
+            </div>
+        </section>
+
+        <section id="modules-section" style="margin-bottom: 3rem;">
+            <h2 style="margin-bottom: 1.5rem; font-size: 1.5rem;">Module Dashboards</h2>
+            <div id="modules-grid" class="grid">
+                <!-- Modules injected here -->
+            </div>
+        </section>
+
+        <section>
+            <h2 style="margin-bottom: 1.5rem; font-size: 1.5rem;">Recent Logs</h2>
+            <div class="card">
+                <table id="logs-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Agent</th>
+                            <th>Level</th>
+                            <th>Message</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- Logs injected here -->
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        async function fetchUIComponents() {
+            try {
+                const response = await fetch('/api/ui/registry');
+                const components = await response.json();
+                const grid = document.getElementById('agents-grid');
+
+                // We'll append widgets to the same grid or a new one. 
+                // Let's create a specific section for Modules if needed, 
+                // but for now, extending the grid is fine or adding a row.
+                // Actually, let's make a dedicated "Module Widgets" section.
+
+                const moduleSection = document.getElementById('modules-section');
+                if (!moduleSection) return; // Should be added in HTML
+
+                const moduleGrid = document.getElementById('modules-grid');
+                moduleGrid.innerHTML = '';
+
+                components.forEach(comp => {
+                    const card = document.createElement('div');
+                    card.className = 'card';
+                    card.innerHTML = comp.html_content;
+                    moduleGrid.appendChild(card);
+
+                    // Inject script if present
+                    if (comp.script_content) {
+                        const script = document.createElement('script');
+                        script.textContent = comp.script_content;
+                        document.body.appendChild(script);
+                    }
+                });
+
+            } catch (e) {
+                console.error("Failed to fetch UI components", e);
+            }
+        }
+
+        async function fetchAgents() {
+            try {
+                const response = await fetch('/api/agents');
+                const agents = await response.json();
+                const grid = document.getElementById('agents-grid');
+                grid.innerHTML = '';
+
+                if (agents.length === 0) {
+                    grid.innerHTML = '<div class="card" style="grid-column: 1/-1; text-align: center; color: #94a3b8;">No agents loaded. Add modules to the modules/ folder.</div>';
+                    return;
+                }
+
+                agents.forEach(agent => {
+                    const card = document.createElement('div');
+                    card.className = 'card';
+                    const statusClass = agent.status === 'running' ? 'status-running' : 'status-stopped';
+
+                    card.innerHTML = `
+                        <h2>
+                            ${agent.name}
+                            <span class="status-badge ${statusClass}">${agent.status}</span>
+                        </h2>
+                        <div style="margin-top: 1rem; font-size: 0.9rem; color: #94a3b8;">
+                            <p>Last Run: ${agent.last_run ? new Date(agent.last_run).toLocaleString() : 'Never'}</p>
+                            <p>Next Run: ${agent.next_run ? new Date(agent.next_run).toLocaleString() : 'Not Scheduled'}</p>
+                        </div>
+                        <div style="margin-top: 1.5rem; display: flex; gap: 0.5rem;">
+                            <button class="btn" onclick="runAgent('${agent.name}')" style="width: 100%; font-size: 0.8rem;">Trigger Now</button>
+                        </div>
+                    `;
+                    grid.appendChild(card);
+                });
+            } catch (e) {
+                console.error("Failed to fetch agents", e);
+            }
+        }
+
+        async function fetchLogs() {
+            try {
+                const response = await fetch('/api/logs?limit=20');
+                const logs = await response.json();
+                const tbody = document.querySelector('#logs-table tbody');
+                tbody.innerHTML = '';
+
+                logs.forEach(log => {
+                    const row = document.createElement('tr');
+                    const time = new Date(log.timestamp).toLocaleTimeString();
+                    const msg = log.message.length > 100 ? log.message.substring(0, 100) + '...' : log.message;
+
+                    let levelColor = '#93c5fd';
+                    let levelBg = 'rgba(59,130,246,0.1)';
+                    if (log.level === 'ERROR') { levelColor = '#fca5a5'; levelBg = 'rgba(239,68,68,0.2)'; }
+                    if (log.level === 'WARNING') { levelColor = '#fcd34d'; levelBg = 'rgba(251,191,36,0.2)'; }
+
+                    row.innerHTML = `
+                        <td style="color: #64748b;">${time}</td>
+                        <td style="font-weight: 500; color: #e2e8f0;">${log.agent_name}</td>
+                        <td>
+                            <span style="padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; background: ${levelBg}; color: ${levelColor};">
+                                ${log.level}
+                            </span>
+                        </td>
+                        <td title="${log.message}">${msg}</td>
+                    `;
+                    tbody.appendChild(row);
+                });
+            } catch (e) {
+                console.error("Failed to fetch logs", e);
+            }
+        }
+
+        async function runAgent(name) {
+            try {
+                const btn = event.target;
+                const originalText = btn.innerText;
+                btn.innerText = 'Running...';
+                btn.disabled = true;
+
+                await fetch(`/api/agents/${name}/run`, { method: 'POST' });
+
+                setTimeout(() => {
+                    btn.innerText = originalText;
+                    btn.disabled = false;
+                    refreshData();
+                }, 1000);
+            } catch (e) {
+                alert('Failed to run agent');
+            }
+        }
+
+        function refreshData() {
+            fetchAgents();
+            fetchLogs();
+            // We fetch UI components only once usually, or on refresh? 
+            // If dynamic data inside them handles itself, we only need to inject once.
+            // But if components change, we might need re-fetching. 
+            // Better to fetch once on load for DOM structure.
+        }
+
+        // Initial load
+        refreshData();
+        fetchUIComponents(); // Call once
+
+        // Poll every 5 seconds
+        setInterval(refreshData, 5000);
+    </script>
+</body>
+
+</html>
+</file>
+
+<file path="web/api.py">
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from core.database import get_db, AgentState, LogEntry, Notification
+import logging
+
+router = APIRouter(prefix="/api", tags=["api"])
+logger = logging.getLogger("jagents.api")
+
+# We need a way to access the loaded agents. 
+# We'll store them in a global variable in main or a singleton registry.
+# For now, let's assume we can import a 'get_agents_registry' or similar.
+# To keep it simple, we will inject dependencies or use a shared state.
+# Let's use a simple global in a new 'core/state.py' or similar, 
+# or just attach to app.state.
+# For now, I will assume `request.app.state.agents` exists.
+
+from fastapi import Request
+
+@router.get("/agents")
+async def list_agents(request: Request, db: AsyncSession = Depends(get_db)):
+    # Combine in-memory status with DB state
+    agents = request.app.state.agents
+    agent_data = []
+    
+    for agent in agents:
+        state = await agent.get_state(db)
+        if not state:
+            state_dict = {"name": agent.name, "status": "unknown", "last_run": None}
+        else:
+            state_dict = {
+                "name": state.name,
+                "status": state.status,
+                "last_run": state.last_run,
+                "next_run": state.next_run,
+                "config": state.config
+            }
+        agent_data.append(state_dict)
+    
+    
+    return agent_data
+
+@router.get("/ui/registry")
+async def get_ui_registry(request: Request):
+    """
+    Returns the list of registered UI components (widgets) from loaded modules.
+    """
+    return request.app.state.ui_registry
+
+@router.post("/agents/{agent_name}/run")
+async def run_agent(agent_name: str, request: Request, background_tasks: BackgroundTasks):
+    agents = {a.name: a for a in request.app.state.agents}
+    agent = agents.get(agent_name)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    # Run in background
+    background_tasks.add_task(agent.run)
+    return {"status": "triggered", "agent": agent_name}
+
+@router.get("/logs")
+async def get_logs(limit: int = 50, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(LogEntry).order_by(LogEntry.timestamp.desc()).limit(limit))
+    logs = result.scalars().all()
+    return logs
+</file>
+
+<file path=".cursorrules">
+# Jagents Project Rules
+
+1. **Modularity**: All agents must be self-contained in `modules/`. They should not modify core code.
+2. **Type Hinting**: Use Python type hints everywhere.
+3. **Async**: The platform is built on FastAPI and asyncio. Prefer `async def` for I/O bound tasks.
+4. **Error Handling**: Agents should not crash the main platform. Wrap agent execution in try/except blocks.
+5. **Documentation**: Docstrings for all classes and functions.
+6. **Testing**: Write tests for new core features.
+7. **No Hardcoding**: Use environment variables or configuration files for secrets and tunable parameters.
+
+# FROZEN PLATFORM RULES
+8. **DO NOT MODIFY CORE**: The files in `core/`, `web/`, `main.py` and `db.py` are considered "Platform Infrastructure". DO NOT modify them unless the user explicitly requests a "Platform Upgrade". 
+    - **Backlog Protocol**: If you identify a necessary improvement to the core platform, **DO NOT** implement it. Instead, add it to `PLATFORM_BACKLOG.md`, reprioritize the list, and update the "Maintenance Prompt" in that file.
+9. **Module-First Development**: All new functionality MUST be implemented as a Module in `modules/` using the `BaseModule` standard.
+10. **Immutable Interfaces**: The `BaseModule` and `BaseAgent` interfaces are frozen contracts. Do not change their signatures.
+</file>
+
+<file path=".gitignore">
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+.env
+.venv
+venv/
+ENV/
+*.db-shm
+*.db-wal
+*.log
+*.db
+</file>
+
+<file path="main.py">
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+import uvicorn
+from core.database import init_db
+from core.scheduler import SchedulerService
+from core.loader import ModuleLoader
+from web.api import router as api_router
+from web.ui import router as ui_router
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("jagents.main")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info("Initializing Jagents Platform...")
+    await init_db()
+    
+    # Initialize Core Services
+    scheduler = SchedulerService.get_instance()
+    
+    # Load Modules
+    loader = ModuleLoader()
+    modules = loader.load_modules()
+    
+    # Register Components
+    app.state.agents = []
+    app.state.ui_registry = []
+    
+    for mod in modules:
+        # Agents
+        app.state.agents.extend(mod.agents)
+        
+        # API Routers
+        if mod.router:
+            app.include_router(mod.router)
+            
+        # UI Components
+        app.state.ui_registry.extend(mod.ui_components)
+        
+        # Lifecycle
+        await mod.on_startup(app.state)
+        logger.info(f"Initialized Module: {mod.name}")
+
+    logger.info(f"Loaded {len(modules)} modules with {len(app.state.agents)} agents.")
+    
+    # Schedule agents
+    for agent in app.state.agents:
+        agent.schedule()
+        logger.info(f"Scheduled agent: {agent.name}")
+
+    yield
+    
+    # Shutdown
+    logger.info("Shutting down...")
+    scheduler.scheduler.shutdown(wait=False)
+
+
+app = FastAPI(title="Jagents", lifespan=lifespan)
+
+# Mount Static
+app.mount("/static", StaticFiles(directory="web/static"), name="static")
+
+# Include Routers
+app.include_router(api_router)
+app.include_router(ui_router)
+
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+</file>
+
+</files>

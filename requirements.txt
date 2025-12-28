@@ -1,30 +1,7 @@
-# PyTorch - auto-detects best version based on platform
-# The code will auto-adapt to:
-#   - Apple Silicon (MPS): Uses built-in GPU acceleration
-#   - NVIDIA GPU (CUDA): Automatically detects and uses CUDA if available
-#   - CPU: Falls back to CPU if no GPU available
-#
-# For macOS (Apple Silicon or Intel): pip install torch (default)
-# For Windows/Linux with NVIDIA GPU: 
-#   Option 1: pip install torch (will use CPU, but code will detect CUDA if you install CUDA PyTorch separately)
-#   Option 2: Install CUDA version: pip install torch --index-url https://download.pytorch.org/whl/cu118
-torch>=2.0.0
-watchdog>=3.0.0
-openai-whisper>=20231117
-requests>=2.31.0
-python-dotenv>=1.0.0
-pydantic>=2.5.0
-pyyaml>=6.0.0
-
-# Optional: Image processing (for OCR)
-# Install with: pip install Pillow pytesseract pillow-heif
-# Also requires Tesseract OCR to be installed on your system:
-#   macOS: brew install tesseract
-#   Linux: sudo apt install tesseract-ocr (or equivalent)
-#   Windows: Download from https://github.com/UB-Mannheim/tesseract/wiki
-Pillow>=10.0.0
-pytesseract>=0.3.10
-pillow-heif>=0.13.0
-
-# Note: Ollama is a separate service, not a Python package
-# Install it from https://ollama.ai/ and run 'ollama serve' separately
+openai-whisper
+torch
+Pillow
+pytesseract
+watchdog
+pydub
+mutagen
